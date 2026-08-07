@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AutoFleet AI — Autonomous Last-Mile Resolution</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= TOP BAR ================= -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><path d="M16 2 L29 9.5 L29 22.5 L16 30 L3 22.5 L3 9.5 Z"/><circle cx="16" cy="16" r="4.4"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>AutoFleet<em>AI</em></h1>
+        <p>Autonomous last-mile disruption resolution</p>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <div class="segmented" id="mode-toggle" role="tablist" aria-label="Scenario">
+        <button data-mode="commercial" class="on" role="tab">Commercial</button>
+        <button data-mode="humanitarian" role="tab">Humanitarian</button>
+      </div>
+
+      <button class="ctl ctl-arm" id="autonomous-btn" aria-pressed="false">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="ctl-label">Autonomous</span>
+        <span class="ctl-state" id="autonomous-state">OFF</span>
+      </button>
+
+      <button class="ctl" id="assumptions-btn">Assumptions &amp; models</button>
+      <button class="ctl" id="reset-btn">Reset</button>
+
+      <div class="engine-badge" id="engine-badge" title="">
+        <span class="pulse" aria-hidden="true"></span>
+        <span id="engine-label">connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= IMPACT STRIP ================= -->
+  <section class="impact-strip" id="impact-strip" aria-label="Cumulative impact"></section>
+
+  <!-- ================= MAIN GRID ================= -->
+  <main class="grid">
+
+    <!-- ---- LEFT: fleet ---- -->
+    <section class="col col-fleet">
+      <div class="col-head">
+        <h2>Active <span id="fleet-kind">deliveries</span></h2>
+        <span class="hint">trigger a disruption &rarr;</span>
+      </div>
+      <div class="fleet-list" id="fleet-list"></div>
+    </section>
+
+    <!-- ---- CENTRE: map + risk ---- -->
+    <section class="col col-centre">
+      <div class="panel panel-map">
+        <div class="panel-head">
+          <h2>Fleet map</h2>
+          <div class="legend">
+            <span><i class="lg lg-assigned"></i>carrying</span>
+            <span><i class="lg lg-standby"></i>standby</span>
+            <span><i class="lg lg-down"></i>unavailable</span>
+            <span><i class="lg lg-hub"></i>depot</span>
+          </div>
+        </div>
+        <div class="map-wrap">
+          <svg id="map" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Fleet map"></svg>
+          <div class="map-foot" id="map-foot"></div>
+        </div>
+      </div>
+
+      <div class="panel panel-risk">
+        <div class="panel-head">
+          <h2>Predicted failure risk</h2>
+          <span class="hint mono">disruption-risk-v1</span>
+        </div>
+        <div class="risk-list" id="risk-list"></div>
+      </div>
+    </section>
+
+    <!-- ---- RIGHT: agent feed ---- -->
+    <section class="col col-feed">
+      <div class="col-head">
+        <h2>Agent activity feed</h2>
+        <div class="feed-status" id="feed-status"><span class="fs-dot"></span><span id="feed-status-text">idle</span></div>
+      </div>
+      <div class="feed" id="feed">
+        <div class="feed-empty" id="feed-empty">
+          <div class="fe-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="21"/><path d="M24 13v11l8 5"/></svg>
+          </div>
+          <p class="fe-title">No active incident</p>
+          <p class="fe-sub">Five agents are idle and waiting on an event. Trigger a
+          disruption on any delivery, or arm <b>Autonomous</b> and the watchdog will
+          fire the chain itself when predicted risk crosses the threshold.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ================= LOG ================= -->
+  <footer class="logbar">
+    <div class="log-head">
+      <span class="lh-title">System log</span>
+      <span class="lh-sub" id="log-sub">no events</span>
+    </div>
+    <div class="log" id="log"></div>
+  </footer>
+</div>
+
+<!-- ================= DRAWER ================= -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <h2>Assumptions &amp; models</h2>
+      <p>Every figure on the dashboard traces back to this page.</p>
+    </div>
+    <button class="drawer-close" id="drawer-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

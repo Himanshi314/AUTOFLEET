@@ -1,0 +1,6 @@
+# The server, the models and the dashboard run on the Python standard library
+# alone — `python server.py` works with nothing installed.
+#
+# This single dependency is only needed for LIVE agents. Without it the system
+# runs in simulated mode and says so on screen.
+anthropic>=0.40.0
