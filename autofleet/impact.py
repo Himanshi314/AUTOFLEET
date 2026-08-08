@@ -124,6 +124,8 @@ class ImpactLedger:
         vehicle_type: str,
         doses_preserved: int = 0,
         payload_note: str = "",
+        llm_calls_used: int = 0,
+        llm_calls_saved: int = 0,
     ) -> Dict:
         entry = {
             "incident_id": incident_id,
@@ -135,6 +137,10 @@ class ImpactLedger:
             "doses_preserved": doses_preserved,
             "vehicle_type": vehicle_type,
             "payload_note": payload_note,
+            # Routing efficiency: how many model calls the severity router avoided
+            # on this incident versus waking every role.
+            "llm_calls_used": llm_calls_used,
+            "llm_calls_saved": llm_calls_saved,
         }
         self.entries.append(entry)
         return entry
@@ -152,6 +158,8 @@ class ImpactLedger:
                 e["failed_attempts_prevented"] for e in self.entries
             ),
             "doses_preserved": sum(e["doses_preserved"] for e in self.entries),
+            "llm_calls_used": sum(e["llm_calls_used"] for e in self.entries),
+            "llm_calls_saved": sum(e["llm_calls_saved"] for e in self.entries),
         }
 
     def reset(self) -> None:

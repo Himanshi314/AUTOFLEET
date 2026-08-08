@@ -44,8 +44,8 @@ const TILES = [
     note: 'end-to-end, agent chain only' },
   { key: 'human_interventions',       label: 'Human interventions', accent: '#8b93f8',
     note: 'coordinators involved' },
-  { key: 'failed_attempts_prevented', label: 'Failed attempts prevented', accent: '#34d399',
-    note: 'first-attempt completions' },
+  { key: 'llm_calls_saved', label: 'AI calls avoided', accent: '#818cf8',
+    note: 'router skipped a role that had nothing to decide' },
   { key: 'km_avoided',                label: 'Redelivery km avoided', accent: '#34d399',
     unit: 'km', dec: 1, note: 'estimate · see assumptions' },
   { key: 'co2e_kg_avoided',           label: 'CO₂e avoided', accent: '#34d399',
@@ -402,6 +402,61 @@ function collapseChain() {
   App.chain = null;
 }
 
+const PATH_STYLE = {
+  'full chain':    { cls: 'p-full', label: 'FULL CHAIN' },
+  'partial chain': { cls: 'p-part', label: 'PARTIAL CHAIN' },
+  'deterministic': { cls: 'p-det',  label: 'NO AGENTS NEEDED' },
+  'escalate':      { cls: 'p-esc',  label: 'ESCALATE' },
+};
+
+/* The routing decision — which roles this incident actually deserves. Rendered
+   before any agent runs, so the judge sees the choice being made. */
+function planCard(ev) {
+  const c = App.chain; if (!c) return;
+  const style = PATH_STYLE[ev.path] || PATH_STYLE['partial chain'];
+  const runs = new Set(ev.agents);
+  const reasonBy = {};
+  (ev.skipped || []).forEach((s) => { reasonBy[s.agent] = s.reason; });
+
+  const chips = ev.specs.map((s) => {
+    const on = runs.has(s.id);
+    return `<span class="rchip ${on ? 'on' : 'off'}"
+              title="${esc(on ? s.owns : reasonBy[s.id] || 'skipped')}">
+              <i>${s.icon}</i>${esc(s.label.replace(' Agent', ''))}
+            </span>`;
+  }).join('');
+
+  const card = el('div', 'pcard ' + style.cls);
+  card.innerHTML =
+    `<div class="pc-head">
+       <span class="pc-tag">router</span>
+       <span class="pc-path">${style.label}</span>
+       <span class="pc-count">${ev.agents.length}/${ev.total} roles
+         ${ev.saved ? `· <b>${ev.saved} AI call${ev.saved === 1 ? '' : 's'} avoided</b>` : ''}</span>
+     </div>
+     <div class="pc-chips">${chips}</div>
+     <div class="pc-reason">${esc(ev.reason)}</div>`;
+  c.spine.appendChild(card);
+  feedEl().scrollTop = 0;
+}
+
+/* A role the router decided had nothing to decide. Shown, not hidden — otherwise
+   the smartest part of the system is invisible. */
+function skippedCard(ev) {
+  const c = App.chain; if (!c) return;
+  const card = el('div', 'acard skipped');
+  card.innerHTML =
+    `<div class="ac-head">
+       <span class="ac-ic">${ev.icon}</span>
+       <div>
+         <div class="ac-name">${esc(ev.label)}</div>
+         <div class="ac-owns">skipped — ${esc(ev.reason)}</div>
+       </div>
+       <span class="ac-time">0.0s</span>
+     </div>`;
+  c.spine.appendChild(card);
+}
+
 function agentStart(ev) {
   const c = App.chain; if (!c) return;
   const card = el('div', 'acard active');
@@ -504,8 +559,11 @@ function selectionCard(ev) {
   const top = ev.contributions.slice(0, 5);
   const max = Math.max(...top.map((x) => x.contribution), 1e-6);
   const card = el('div', 'scard');
+  const how = ev.by_model_only
+    ? 'selected by the ranker · no agent needed'
+    : (ev.retained ? 'assignment retained' : 'driver selected');
   card.innerHTML =
-    `<div class="sc-k">${ev.retained ? 'assignment retained' : 'driver selected'} · rank ${ev.rank}${
+    `<div class="sc-k">${how} · rank ${ev.rank}${
        ev.margin_over_next != null ? ` · +${nf(ev.margin_over_next, 3)} over next` : ''}</div>
      <div class="sc-name">${esc(ev.driver_name)}</div>
      <div class="sc-sub">${nf(ev.distance_km, 1)} km from pickup · ETA ${nf(ev.eta_minutes, 0)} min ·
@@ -551,6 +609,8 @@ function resolvedCard(ev) {
     `risk <b>${(ev.risk_before * 100).toFixed(0)}% → ${(ev.risk_after * 100).toFixed(0)}%</b>`,
     `ETA <b>${nf(ev.eta_minutes, 0)} min</b>`,
     ev.reassigned ? `now with <b>${esc(ev.new_driver)}</b>` : `retained <b>${esc(ev.new_driver)}</b>`,
+    `<b>${ev.calls_made}</b> AI call${ev.calls_made === 1 ? '' : 's'}${
+      ev.calls_saved ? `, <b>${ev.calls_saved}</b> avoided` : ''}`,
   ];
   const card = el('div', 'rescard');
   card.innerHTML =
@@ -831,9 +891,11 @@ function handle(ev) {
       startChain(ev);
       break;
 
+    case 'plan':             planCard(ev); break;
     case 'agent_start':      agentStart(ev); break;
     case 'agent_delta':      agentDelta(ev); break;
     case 'agent_done':       agentDone(ev); break;
+    case 'agent_skipped':    skippedCard(ev); break;
     case 'tool':             toolCard(ev); break;
     case 'selection':        selectionCard(ev); break;
 

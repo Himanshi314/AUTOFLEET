@@ -2,7 +2,7 @@
 
 > Handover document. If you are an AI assistant picking up this project, read this
 > file first. It contains the idea, the honest positioning, the architecture, every
-> measured number, and the rules not to break. Last verified 2026-08-06.
+> measured number, and the rules not to break. Last verified 2026-08-07.
 
 **One sentence:** When a delivery goes wrong, a human has to fix it, and while
 they're fixing it the delivery fails — AutoFleet AI fixes it immediately instead.
@@ -59,15 +59,15 @@ In cold chain (vaccines, whole blood, lab samples) the cost is not a retry —
 **the payload spoils.** Doses nobody receives.
 
 ### 4. What does our system do instead?
-Detects the disruption from telemetry (nobody reports it), wakes a chain of five
-specialist agents, and resolves it end to end in **~4–5 seconds**: recipient
+Detects the disruption from telemetry (nobody reports it), wakes a chain of up to six
+specialist agents (the router decides how many), and resolves it end to end in **~4–5 seconds**: recipient
 notified, route assessed, a specific named replacement driver assigned, original
 driver marked unavailable with roadside assistance dispatched and earnings
 protected, and one authoritative resolution issued. The decision is written back
 to fleet state. No human touches it.
 
 ### 5. Why can't you just write rules for this?
-Because the five decisions **constrain each other in a loop**:
+Because the decisions **constrain each other in a loop**:
 - whether you need a new driver depends on whether the customer accepted a safe drop
 - which driver you pick depends on how long the detour is
 - what you tell the customer depends on which driver you got
@@ -150,7 +150,7 @@ makes **zero external network requests** (verified).
 
 | Mode | How | Behaviour |
 |---|---|---|
-| **Live** | `ANTHROPIC_API_KEY` in env or `.env` (copy `.env.example`), plus `pip install anthropic` | Five agents stream from **Claude Opus 5**. Header reads `LIVE · claude-opus-5`. |
+| **Live** | `ANTHROPIC_API_KEY` in env or `.env` (copy `.env.example`), plus `pip install anthropic` | Agents stream from **Claude Opus 5**. Header reads `LIVE · claude-opus-5`. |
 | **Simulated** | No key needed | Same chain, same models, but agent text is deterministic prose derived from real computed state. Every card labelled `simulated`; header reads `SIMULATED AGENTS`. |
 
 Simulated mode exists so a demo cannot die on a flaky network — **not** to pass
@@ -195,18 +195,43 @@ Design decisions that matter:
 
 ---
 
-## 6. The five agents
+## 6. The severity router (`autofleet/routing.py`)
 
-Five **roles**, not five processes. Stateless. Each is ~290 tokens of system
+Decides which roles an incident deserves, **before any model call**. No AI in this
+module — if/else over numbers already computed.
+
+| Condition | Path | Roles |
+|---|---|---|
+| No eligible driver | escalate | 0 — handed to a human |
+| Courier disabled, or replacement stock needed | full chain | 6 |
+| A better driver now outranks the incumbent | full chain | 6 |
+| Internal-only fix, ETA shift insignificant, risk calm | deterministic | **0** |
+| Otherwise (recipient's expectations change) | partial chain | 4 |
+
+An ETA shift is significant above `max(5 min, 20% of current ETA)` — six minutes on
+a 70-minute run is noise, six on a 12-minute run is most of the journey. Both
+figures are assumptions.
+
+**Measured distribution** across all 28 disruption × delivery combinations:
+**29% full · 61% partial · 11% deterministic.** Do not confuse this with the 66%
+ranker-margin figure in section 2 — different measurement, different meaning.
+
+## 6b. The six agents
+
+Six **roles**, not six processes. Stateless. Each is ~290 tokens of system
 prompt plus a structured input. Nothing is instantiated or persisted per incident.
 
 | # | Agent | Owns |
 |---|---|---|
-| 1 | 👤 Customer | What the recipient is told and asked |
-| 2 | 📍 Route | Route feasibility and the minute impact |
-| 3 | 🔄 Reallocation | Which named driver takes the job |
-| 4 | 🚚 Driver | Original courier's status, support, earnings |
-| 5 | 🧠 Coordinator | The final authoritative resolution |
+| 1 | 🧭 Risk | How severe this is, and what kind of problem |
+| 2 | 👤 Customer | What we ask of the recipient |
+| 3 | 📣 Communication | The message that actually goes out |
+| 4 | 🔄 Resource | Which named driver takes the job |
+| 5 | 🚚 Delivery | Original courier's status, support, earnings |
+| 6 | 🧠 Coordinator | The final authoritative resolution |
+
+Names match the round-1 pitch deck. The Reallocation Agent's `PICK:` parsing and
+fallback-to-top-ranked behaviour is unchanged, now on the Resource Agent.
 
 **Order is deliberate.** Customer goes first because its commitment constrains
 everything downstream (a safe-drop authorisation changes what a reassignment must

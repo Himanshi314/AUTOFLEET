@@ -5,6 +5,21 @@ actually works, and your specific tasks with a definition of "done".
 
 Team 404 · 4 people · ~10 days · Round 2
 
+> ## ✅ Already implemented — do not redo
+>
+> The deck-alignment work and the router are **built, tested and pushed**. Tasks
+> marked ✅ below are done; read the code instead of writing it. What remains is
+> the work only a human can do: **A1** (live API key), **A7–A9** (tool use,
+> fact-check, pitch), **B3–B5** (verify emission factors, evals, own the model
+> cards), **C1–C2 / C6–C7** (look at the UI, projector, choreography, backup
+> video), **D2–D5** (repeatable reset, break it on purpose, hosting), and **E1–E6**
+> for everyone.
+>
+> **Measured routing distribution** across all 28 disruption × delivery
+> combinations: **29% full chain (6 roles) · 61% partial (4 roles) · 11%
+> deterministic (0 roles)**. Note this is a different figure from the 66%
+> ranker-margin number — don't conflate them in the pitch.
+
 ---
 
 # PART 1 — THE IDEA
@@ -47,7 +62,7 @@ This is the change from what we pitched in round 1, and it's the most important
 idea in the project now.
 
 Our deck (slide 3) says **"*relevant* AI agents activated."** Not *all* agents.
-The current code runs all five every time — so that promise isn't true yet.
+The code now does exactly that — `autofleet/routing.py` decides per incident.
 
 The fix, and the insight behind it:
 
@@ -59,11 +74,15 @@ costs nothing: everything needed to make it is known *before* any AI call.
 
 | Situation | Agents that run | AI calls |
 |---|---|---|
-| Recipient not home, one obvious slot, driver fine | **none** — send the slot link deterministically | **0** |
-| Reroute only — gridlock, driver continues | Risk → Customer → Communication → Coordinator | 4 |
-| Driver disabled — breakdown, reassignment mandatory | all six | 6 |
-| Cold chain closing — critical, tight window | all six, escalate immediately if nothing fits | 6 |
+| Internal-only fix, ETA barely moves (a scheduling clash) | **none** — the models resolve it outright | **0** |
+| Recipient's expectations change, courier keeps the job | Risk → Customer → Communication → Coordinator | 4 |
+| Courier disabled, or a better driver now outranks them | all six | 6 |
+| Payload not deliverable — replacement from depot | all six | 6 |
 | No eligible driver at all | **none** — escalate to a human | **0** |
+
+An ETA shift counts as significant if it exceeds **20% of the current ETA, floor
+5 minutes** — six minutes on a 70-minute run is noise; six on a 12-minute run is
+most of the journey.
 
 Three things this buys us that we currently cannot claim:
 
@@ -74,10 +93,13 @@ Three things this buys us that we currently cannot claim:
    intelligence a problem deserves* is more autonomous than one that fires
    everything at everything.
 
+**Measured across all 28 disruption × delivery combinations: 29% full chain,
+61% partial, 11% deterministic.**
+
 ## The corrected agent lineup
 
-Our round-1 deck named five agents. The code used different names. **The code is
-being changed to match the deck**, because judges who saw round 1 may check.
+Our round-1 deck named five agents. The code used different names. **The code now
+matches the deck**, because judges who saw round 1 may check.
 
 New chain (this matches deck slide 7, with Risk moved to the front):
 
@@ -118,15 +140,15 @@ Its name covers two different jobs, and we split them:
   it's our strongest technical feature — it's what lets the system fire before a
   human notices.
 - **Assess** — *"how bad is it, what kind of problem is this?"* Reads those numbers
-  and forms a judgement that constrains everyone downstream. **This is the agent
-  we're adding.**
+  and forms a judgement that constrains everyone downstream. **This is the Risk
+  Agent, now built.**
 
-What it will output, roughly:
+What it outputs — this is real output from a run:
 
-> "Failure risk on D-102 is 53% and rising, driven by corridor congestion
-> compounding with a driver 6.5 hours into shift and a vehicle health signal at
-> 0.42. Combined with a breakdown event this is a hard stop, not a delay —
-> reassignment is mandatory and no same-driver retry should be offered."
+> "Failure risk on D-102 is 55% (elevated), driven mainly by corridor congestion
+> compounding with schedule pressure. This is a hard stop rather than a delay —
+> the courier cannot continue, so reassignment is mandatory and no same-courier
+> retry should be offered."
 
 Note the last clause is an **instruction to the agents after it**. That's the job.
 
@@ -334,11 +356,11 @@ model output. **Never remove the labelling.**
 | # | Task | Done when |
 |---|---|---|
 | A1 | **Get live agents working.** Key in `.env`, `pip install anthropic`, run a chain. | Header shows `LIVE · claude-opus-5` and cards say `live`, not `simulated`. **Do this on Day 1** — if it's blocked we must know immediately. |
-| A2 | **Rename agents to match the deck.** `Driver Agent` → `Delivery Agent`, `Reallocation Agent` → `Resource Agent`. In `AGENT_SPECS` and `_ROLE_PROMPTS`. | Dashboard shows the deck's names. |
-| A3 | **Remove the Route Agent**; pass its `route.alternates` output into the Resource Agent's input instead. | Chain has no Route card; Resource Agent's prompt contains route alternates. |
-| A4 | **Add the Risk Agent**, first in the chain. Prompt: read the risk score + contributions, state severity, and state what it means for the agents after it. | A Risk card appears first and its text constrains the later agents. |
-| A5 | **Add the Communication Agent** after Customer. Customer decides *what we ask of the recipient*; Communication decides *what message goes out*. | Six agent cards; the two decisions are visibly different, not duplicates. |
-| A6 | **Wire in the router** — call `routing.plan_chain()` (Track B builds it) and only run the agents it returns. | A `customer_not_home` on a healthy delivery runs 0–4 agents, not 6. |
+| A2 ✅ | **DONE — Rename agents to match the deck.** `Driver Agent` → `Delivery Agent`, `Reallocation Agent` → `Resource Agent`. In `AGENT_SPECS` and `_ROLE_PROMPTS`. | Dashboard shows the deck's names. |
+| A3 ✅ | **DONE — Remove the Route Agent**; pass its `route.alternates` output into the Resource Agent's input instead. | Chain has no Route card; Resource Agent's prompt contains route alternates. |
+| A4 ✅ | **DONE — Add the Risk Agent**, first in the chain. Prompt: read the risk score + contributions, state severity, and state what it means for the agents after it. | A Risk card appears first and its text constrains the later agents. |
+| A5 ✅ | **DONE — Add the Communication Agent** after Customer. Customer decides *what we ask of the recipient*; Communication decides *what message goes out*. | Six agent cards; the two decisions are visibly different, not duplicates. |
+| A6 ✅ | **DONE — Wire in the router** — call `routing.plan_chain()` (Track B builds it) and only run the agents it returns. | A `customer_not_home` on a healthy delivery runs 0–4 agents, not 6. |
 | A7 | **Real tool use for the Resource Agent's pick.** Replace the `PICK:` regex with a schema-validated tool call. | No regex parsing; the model returns structured JSON. Kills our weakest architectural point. |
 | A8 | **Coordinator fact-check.** Assert every number in the Coordinator's output appears in its input; fail loudly if not. | A "facts verified ✓" signal per incident. |
 | A9 | **Write the pitch + Q&A prep doc.** 10 likely questions with answers. Must include: "where's the ML?", "so it's just prompts?", "what if it fails?", "what's your weakest part?" | A doc all four of us have rehearsed. |
@@ -351,8 +373,8 @@ model output. **Never remove the labelling.**
 
 | # | Task | Done when |
 |---|---|---|
-| B1 | **Build `autofleet/routing.py`** — the severity router. One pure function: `plan_chain(disruption, risk, ranking) -> list[agent_id]`. Uses only facts known before any AI call: `disables_driver`, `severity`, risk band, `margin_over_next`, `needs_replacement_stock`. **This is the most important task on the team** — it makes slide 3 true. | Returns the right agent list for each row of the routing table in Part 1. Unit-test each row. |
-| B2 | **Expose `llm_calls_saved`** — how many agent calls the router skipped vs. running all six. Track it cumulatively for the impact tile. | The number is available for Track C to render. |
+| B1 ✅ | **DONE (needs your tests) — `autofleet/routing.py`** — the severity router. One pure function: `plan_chain(disruption, risk, ranking) -> list[agent_id]`. Uses only facts known before any AI call: `disables_driver`, `severity`, risk band, `margin_over_next`, `needs_replacement_stock`. **This is the most important task on the team** — it makes slide 3 true. | Returns the right agent list for each row of the routing table in Part 1. Unit-test each row. |
+| B2 ✅ | **DONE — `llm_calls_saved`** — how many agent calls the router skipped vs. running all six. Track it cumulatively for the impact tile. | The number is available for Track C to render. |
 | B3 | **Verify every emission factor against its real source.** Look up the actual DEFRA/BEIS figure for a petrol two-wheeler and the CEA grid factor for India. Fix what's wrong. Cite properly in `impact.py`. | Every factor in the Assumptions drawer has a source you personally checked. **You are the person who can say "I verified these."** |
 | B4 | **Write the eval scaffold** — a small script scoring the Resource Agent's driver pick against a known-good answer. Doesn't need real data; needs to exist and run. | `python eval.py` prints a score. |
 | B5 | **Own the model cards.** Be able to explain every weight, why the model is linear, why nothing is trained, and what *would* be trained. | You can answer the ML question cold, with no notes. |
@@ -367,9 +389,9 @@ model output. **Never remove the labelling.**
 |---|---|---|
 | C1 | **Actually look at the UI.** It was built and verified structurally but **nobody has seen it with human eyes.** Open it, check every panel. | You've listed every visual defect you found. |
 | C2 | **Check it on the real presentation screen/projector.** Dark themes wash out badly on cheap projectors. | Contrast confirmed readable on the actual hardware. If not, lighten the palette. |
-| C3 | **Update agent names in the UI** to match Track A's renames, and make room for six cards instead of five. | Six cards render cleanly without scrolling problems. |
-| C4 | **Add the `LLM calls saved` tile** using Track B's number. | Tile ticks up as incidents are routed. |
-| C5 | **Show skipped agents.** When the router skips an agent, show it greyed out with the reason — *"skipped: no reassignment needed"*. **This is how the judge SEES the routing decision.** Without it, the smartest part of the system is invisible. | Skipped agents visibly appear as skipped, not absent. |
+| C3 ✅ | **DONE — agent names in the UI** to match Track A's renames, and make room for six cards instead of five. | Six cards render cleanly without scrolling problems. |
+| C4 ✅ | **DONE — the `AI calls avoided` tile** using Track B's number. | Tile ticks up as incidents are routed. |
+| C5 ✅ | **DONE — Show skipped agents.** When the router skips an agent, show it greyed out with the reason — *"skipped: no reassignment needed"*. **This is how the judge SEES the routing decision.** Without it, the smartest part of the system is invisible. | Skipped agents visibly appear as skipped, not absent. |
 | C6 | **Write the demo choreography** — exactly what's on screen at each beat, and what the presenter says. | A written script, timed, under 4 minutes. |
 | C7 | **Record a backup video** of a perfect run. | An MP4 on the presenting laptop. If the network dies on stage, we play it and keep talking. |
 
@@ -381,7 +403,7 @@ model output. **Never remove the labelling.**
 
 | # | Task | Done when |
 |---|---|---|
-| D1 | **Add the 2 missing disruptions from deck slide 2:** `conflicting_assignment` and `priority_override`. Add to `DISRUPTIONS` with `disables_driver`, `severity`, `detected_as`, etc. | Both appear as buttons and both resolve end to end. |
+| D1 ✅ | **DONE — the 2 missing disruptions from deck slide 2:** `conflicting_assignment` and `priority_override`. Add to `DISRUPTIONS` with `disables_driver`, `severity`, `detected_as`, etc. | Both appear as buttons and both resolve end to end. |
 | D2 | **Make the demo state resettable and repeatable.** Reset must always return to a clean, identical starting state. | Press Reset 10 times, get the same board every time. |
 | D3 | **Break it on purpose.** Kill the network mid-chain. Use a bad API key. Trigger 6 incidents at once. Switch scenario mid-chain. | You've written down what happens in each case and nothing leaves a delivery stuck. |
 | D4 | **Decide and set up hosting.** Localhost on the presenting laptop is a legitimate and often safer choice. | Decision made and tested on the actual machine. |

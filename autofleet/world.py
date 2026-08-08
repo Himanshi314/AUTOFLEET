@@ -39,6 +39,7 @@ HUMANITARIAN_NODES = [
 
 DISRUPTIONS: Dict[str, Dict] = {
     "bike_breakdown": {
+        "needs_customer_decision": True,
         "label": "Vehicle Breakdown",
         "icon": "🔧",
         "severity": "high",
@@ -50,6 +51,7 @@ DISRUPTIONS: Dict[str, Dict] = {
         "customer_frame": "delay caused by a courier vehicle failure",
     },
     "customer_not_home": {
+        "needs_customer_decision": True,
         "label": "Recipient Not Home",
         "icon": "🚪",
         "severity": "medium",
@@ -61,6 +63,7 @@ DISRUPTIONS: Dict[str, Dict] = {
         "customer_frame": "recipient unavailable at the delivery window",
     },
     "wrong_address": {
+        "needs_customer_decision": True,
         "label": "Address Mismatch",
         "icon": "📍",
         "severity": "medium",
@@ -72,6 +75,7 @@ DISRUPTIONS: Dict[str, Dict] = {
         "customer_frame": "address could not be resolved on arrival",
     },
     "traffic_gridlock": {
+        "needs_customer_decision": False,
         "label": "Corridor Gridlock",
         "icon": "🚧",
         "severity": "medium",
@@ -83,6 +87,7 @@ DISRUPTIONS: Dict[str, Dict] = {
         "customer_frame": "unexpected road closure on the delivery corridor",
     },
     "package_damaged": {
+        "needs_customer_decision": True,
         "label": "Payload Damaged",
         "icon": "📦",
         "severity": "high",
@@ -93,7 +98,32 @@ DISRUPTIONS: Dict[str, Dict] = {
         "detected_as": "Courier-reported damage, payload integrity check failed",
         "customer_frame": "the item was damaged in transit and is being replaced",
     },
+    "conflicting_assignment": {
+        "needs_customer_decision": False,
+        "label": "Conflicting Assignment",
+        "icon": "⚡",
+        "severity": "medium",
+        "disables_driver": False,
+        "needs_replacement_stock": False,
+        "route_penalty_min": 6.0,
+        "driver_support": None,
+        "detected_as": "Two active jobs assigned to one courier in the same window",
+        "customer_frame": "a scheduling conflict on the courier's route",
+    },
+    "priority_override": {
+        "needs_customer_decision": True,
+        "label": "Priority Override",
+        "icon": "⏫",
+        "severity": "high",
+        "disables_driver": False,
+        "needs_replacement_stock": False,
+        "route_penalty_min": 3.0,
+        "driver_support": None,
+        "detected_as": "Higher-priority consignment injected into the same corridor",
+        "customer_frame": "a re-sequenced delivery window",
+    },
     "cold_chain_breach": {
+        "needs_customer_decision": True,
         "label": "Cold Chain At Risk",
         "icon": "🌡️",
         "severity": "critical",
@@ -580,8 +610,12 @@ class World:
                 if km > direct_km * 2.1:
                     continue
                 # A detour dodges the blocked segment, so it does not carry the
-                # direct path's penalty, but it does pay slightly lighter traffic.
-                mins = travel_minutes(km, max(0.05, traffic - 0.18), rural)
+                # direct path's disruption penalty. It sees marginally lighter
+                # traffic for choosing a less-congested corridor — but only
+                # marginally: discounting the whole alternate route heavily would
+                # let any long detour beat a clear road, which is not how roads
+                # work. The penalty being avoided is what makes a reroute pay.
+                mins = travel_minutes(km, max(0.05, traffic - 0.06), rural)
                 options.append(
                     {
                         "via": n,
@@ -656,6 +690,8 @@ class World:
         new_eta: float,
         support: Optional[str],
         handover_at: Optional[tuple] = None,
+        llm_calls_used: int = 0,
+        llm_calls_saved: int = 0,
     ) -> Dict:
         """Commit the chain's decision to fleet state and the impact ledger."""
         disruption = DISRUPTIONS[disruption_key]
@@ -726,6 +762,8 @@ class World:
                 vehicle_type=vehicle,
                 doses_preserved=d.get("doses", 0) if self.is_humanitarian else 0,
                 payload_note=d["payload"],
+                llm_calls_used=llm_calls_used,
+                llm_calls_saved=llm_calls_saved,
             )
             return {
                 "reassigned": reassigned,
