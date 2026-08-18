@@ -103,7 +103,7 @@ export function AssumptionsModal({ isOpen, onClose, meta }) {
                 <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--primary)' }}>CO₂e Emission Standards</h4>
               </div>
               <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                Sourced from UK DEFRA &amp; ARAI standard vehicle operational factors:
+                Sourced from DEFRA/DESNZ 2025 GHG conversion factors and the CEA CO2 Baseline Database v21.0 (India grid). Each factor is an estimate — see EMISSION_SOURCES in autofleet/impact.py for the per-vehicle citation:
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 8px', backgroundColor: 'var(--bg-subtle)', borderRadius: 4 }}>
@@ -134,7 +134,7 @@ export function AssumptionsModal({ isOpen, onClose, meta }) {
               <ul style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, paddingLeft: 18 }}>
                 <li><b>Coordinator time saved:</b> 14 minutes baseline per phone exception (calls, reassignment, route updating).</li>
                 <li><b>Avoided redelivery distance:</b> ~27 km per prevented second-attempt trip in Bengaluru metropolitan.</li>
-                <li><b>Routing circuity factor:</b> Haversine aerial distance × <b>1.27</b> empirical street network factor.</li>
+                <li><b>Routing circuity factor:</b> Haversine aerial distance × <b>1.35</b> assumed street network factor.</li>
                 <li><b>Cold-chain threshold:</b> 60–90 minute strict stability window for vaccines and blood consignments.</li>
               </ul>
             </div>

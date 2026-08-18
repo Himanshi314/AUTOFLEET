@@ -18,9 +18,9 @@ export const DEMO_USERS = {
   },
   company: {
     role: 'company',
-    name: 'Delhivery Operations Desk',
+    name: 'Operations Desk',
     email: 'ops@delhivery.com',
-    companyName: 'Delhivery Logistics Ltd.',
+    companyName: 'Demo Carrier (illustrative)',
     fleetSize: 1420,
     activeHubs: 8,
   },

@@ -8,7 +8,12 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, '../web'),
     emptyOutDir: false,
+    // The build writes into ../web, which ALSO holds the hand-written vanilla
+    // dashboard (web/index.html). Vite names its HTML output after the entry
+    // file, so the entry is react.html — never index.html. Renaming it back
+    // would silently overwrite the working dashboard on the next build.
     rollupOptions: {
+      input: path.resolve(__dirname, 'react.html'),
       output: {
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',

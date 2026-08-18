@@ -64,13 +64,13 @@ export function CompanyDashboard({
         <div className="card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Total Volume (Today)
+              Disruptions Resolved
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--primary)', marginTop: 2 }}>
-              32,842
+              {impact.incidents_resolved ?? 0}
             </div>
             <div style={{ fontSize: 11, color: '#059669', display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-              <TrendingUp size={12} /> +8.4% vs last week
+              <TrendingUp size={12} /> {impact.human_interventions ?? 0} human interventions
             </div>
           </div>
           <div style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: 'var(--bg-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
@@ -85,7 +85,7 @@ export function CompanyDashboard({
               Active {isHumanitarian ? 'Consignments' : 'Deliveries'}
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, color: '#2563EB', marginTop: 2 }}>
-              {deliveries.length > 0 ? deliveries.length * 40 + 8 : 488}
+              {deliveries.length}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
               {drivers.length} couriers in live grid
@@ -100,13 +100,15 @@ export function CompanyDashboard({
         <div className="card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              On-Time SLA Rate
+              Fleet On-Time Record
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, color: '#059669', marginTop: 2 }}>
-              96.7%
+              {drivers.length
+                ? (drivers.reduce((a, d) => a + (d.on_time_rate || 0), 0) / drivers.length * 100).toFixed(1) + '%'
+                : '—'}
             </div>
-            <div style={{ fontSize: 11, color: '#059669', marginTop: 2 }}>
-              Autonomous saved 14m/incident
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+              mean of {drivers.length} couriers
             </div>
           </div>
           <div style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: '#ECFDF5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#059669' }}>
@@ -180,7 +182,7 @@ export function CompanyDashboard({
           <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent)' }}>
             {(impact.co2e_kg_avoided || 0).toFixed(2)} <small style={{ fontSize: 11 }}>kg</small>
           </div>
-          <div style={{ fontSize: 9, opacity: 0.75 }}>DEFRA &amp; ARAI factors</div>
+          <div style={{ fontSize: 9, opacity: 0.75 }}>DEFRA / CEA factors · estimates</div>
         </div>
 
         <div>
@@ -211,7 +213,7 @@ export function CompanyDashboard({
                   Live Bengaluru Fleet Map
                 </h3>
                 <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                  Real-time GPS telemetry, corridor circuity factor 1.27, and active handovers
+                  Live positions from real coordinates, circuity factor 1.35, and active handovers
                 </p>
               </div>
               <span className="badge badge-nominal">

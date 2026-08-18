@@ -331,7 +331,7 @@ export function InteractiveMap({
         </div>
 
         <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-          {mapData.nodes?.length || 0} nodes · {mapData.roads?.length || 0} corridors · real coords × 1.27 circuity
+          {mapData.nodes?.length || 0} nodes · {mapData.roads?.length || 0} corridors · real coords × 1.35 circuity
         </div>
       </div>
     </div>

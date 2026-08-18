@@ -32,6 +32,34 @@ from typing import Dict, Iterator, List, Optional
 # Configuration
 # --------------------------------------------------------------------------
 
+def _load_dotenv() -> None:
+    """Read KEY=VALUE lines from a local .env without adding a dependency.
+
+    This MUST run before the constants below are evaluated. They are module-level,
+    so if .env is only read later (say, inside a constructor) then
+    AUTOFLEET_PROVIDER and AUTOFLEET_MODEL have already been fixed to their
+    defaults and the file silently has no effect.
+    """
+    for candidate in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if not candidate.is_file():
+            continue
+        try:
+            for raw in candidate.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                # Tolerate `KEY = value` and quoted values — a stray space after
+                # the equals sign is the most common way to get this wrong.
+                key, value = key.strip(), value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            pass
+
+
+_load_dotenv()   # before anything reads os.environ
+
 PROVIDER = os.environ.get("AUTOFLEET_PROVIDER", "anthropic").strip().lower()
 
 ANTHROPIC_MODEL = os.environ.get("AUTOFLEET_MODEL", "claude-opus-5")
@@ -60,24 +88,6 @@ _NO_EFFORT_PREFIXES = ("claude-haiku", "claude-3")
 _NO_EFFORT_EXACT = {"claude-sonnet-4-5"}
 
 
-def _load_dotenv() -> None:
-    """Read KEY=VALUE lines from a local .env without adding a dependency."""
-    for candidate in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
-        if not candidate.is_file():
-            continue
-        try:
-            for raw in candidate.read_text(encoding="utf-8").splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key, value = key.strip(), value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-        except OSError:
-            pass
-
-
 # --------------------------------------------------------------------------
 # Base: the contract, plus the fallback both providers share
 # --------------------------------------------------------------------------
@@ -89,7 +99,6 @@ class LLM:
     model = "deterministic-fallback"
 
     def __init__(self) -> None:
-        _load_dotenv()
         self._error: Optional[str] = None
 
     # -- to be provided by subclasses --------------------------------------
@@ -379,6 +388,11 @@ class GroqLLM(LLM):
                 "Authorization": f"Bearer {self._key}",
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream" if stream else "application/json",
+                # Cloudflare sits in front of the Groq API and rejects urllib's
+                # default "Python-urllib/3.x" signature with Error 1010 (access
+                # denied) before the request ever reaches Groq — which looks
+                # exactly like an auth failure but isn't. Identify properly.
+                "User-Agent": f"AutoFleetAI/{__import__('autofleet').__version__} (+python-urllib)",
             },
         )
         return urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS)
@@ -402,7 +416,12 @@ class GroqLLM(LLM):
                 429: " — free-tier rate limit; wait and retry",
             }
             hint = hints.get(exc.code, "")
-            if not hint and "model" in str(msg).lower():
+            # A Cloudflare edge block is not an auth problem, and saying "check
+            # your key" would send you hunting in the wrong place.
+            if "1010" in str(msg) or "cloudflare" in str(msg).lower():
+                hint = (" — Cloudflare edge block, not an auth failure. The "
+                        "request never reached Groq; check the User-Agent header.")
+            elif not hint and "model" in str(msg).lower():
                 hint = " — check console.groq.com/docs/models and set AUTOFLEET_MODEL"
             return f"HTTP {exc.code}: {str(msg)[:180]}{hint}"
         return f"{type(exc).__name__}: {exc}"[:200]

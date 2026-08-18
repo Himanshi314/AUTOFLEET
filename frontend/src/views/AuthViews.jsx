@@ -114,7 +114,7 @@ export function AuthView({ role = 'company', onNavigate }) {
           >
             <Sparkles size={14} />
             {role === 'courier' && 'Sign In as Suresh Kumar (Courier)'}
-            {role === 'company' && 'Sign In as Delhivery Ops Desk'}
+            {role === 'company' && 'Sign In as Operations Desk'}
             {role === 'admin' && 'Sign In as Root Administrator'}
           </button>
         </div>
