@@ -23,6 +23,21 @@ MAX_TOKENS = 1400
 # inputs, not open-ended reasoning. Keeps the chain inside a demo's patience.
 EFFORT = os.environ.get("AUTOFLEET_EFFORT", "low")
 
+# `output_config.effort` is not accepted on the Haiku tier or on older Sonnet
+# models — sending it returns a 400. Since AUTOFLEET_MODEL exists precisely so a
+# cheaper model can be swapped in, the parameter has to be conditional or the
+# cheap path breaks on its first call.
+_NO_EFFORT_PREFIXES = ("claude-haiku", "claude-3")
+_NO_EFFORT_EXACT = {"claude-sonnet-4-5"}
+SUPPORTS_EFFORT = (
+    not MODEL.startswith(_NO_EFFORT_PREFIXES) and MODEL not in _NO_EFFORT_EXACT
+)
+
+
+def _request_kwargs() -> dict:
+    """Model-dependent request parameters, so a cheaper model can be dropped in."""
+    return {"output_config": {"effort": EFFORT}} if SUPPORTS_EFFORT else {}
+
 # A 1-3 sentence answer at low effort returns in a few seconds. The SDK default
 # timeout is 10 minutes, which would let one hung call stall an entire incident —
 # so cap it hard. One retry, not two: a second failure means degrade, not wait.
@@ -75,11 +90,16 @@ class LLM:
 
     @property
     def status(self) -> Dict:
+        effort = EFFORT if (self.live and SUPPORTS_EFFORT) else None
         return {
             "live": self.live,
             "model": MODEL if self.live else "deterministic-fallback",
-            "effort": EFFORT if self.live else None,
-            "note": self._error or f"Live agents on {MODEL} (effort={EFFORT}).",
+            "effort": effort,
+            "note": self._error or (
+                f"Live agents on {MODEL}"
+                + (f" (effort={effort})." if effort else
+                   " (this model has no effort parameter).")
+            ),
         }
 
     # ----------------------------------------------------------------------
@@ -131,8 +151,8 @@ class LLM:
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
                 system=system,
-                output_config={"effort": EFFORT},
                 messages=[{"role": "user", "content": user}],
+                **_request_kwargs(),
             ) as stream:
                 for chunk in stream.text_stream:
                     collected.append(chunk)
@@ -207,10 +227,10 @@ class LLM:
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
                 system=system,
-                output_config={"effort": EFFORT},
                 tools=[tool],
                 tool_choice={"type": "tool", "name": tool["name"]},
                 messages=[{"role": "user", "content": user}],
+                **_request_kwargs(),
             ) as stream:
                 # Drain the raw events so the SDK's timeout protection applies;
                 # the useful payload is on the assembled final message.
