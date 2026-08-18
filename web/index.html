@@ -23,6 +23,11 @@
     </div>
 
     <div class="topbar-controls">
+      <div class="segmented" id="view-toggle" role="tablist" aria-label="Dashboard">
+        <button data-view="ops" class="on" role="tab">Operations</button>
+        <button data-view="courier" role="tab">Courier</button>
+      </div>
+
       <div class="segmented" id="mode-toggle" role="tablist" aria-label="Scenario">
         <button data-mode="commercial" class="on" role="tab">Commercial</button>
         <button data-mode="humanitarian" role="tab">Humanitarian</button>
@@ -34,7 +39,7 @@
         <span class="ctl-state" id="autonomous-state">OFF</span>
       </button>
 
-      <button class="ctl" id="assumptions-btn">Assumptions &amp; models</button>
+      <button class="ctl" id="assumptions-btn">Assumptions</button>
       <button class="ctl" id="reset-btn">Reset</button>
 
       <div class="engine-badge" id="engine-badge" title="">
@@ -105,6 +110,12 @@
       </div>
     </section>
   </main>
+
+  <!-- ================= COURIER VIEW ================= -->
+  <!-- What the person on the bike sees. Same live state, different audience:
+       their job, and — if the system released them — the support dispatched and
+       their earnings protected. -->
+  <section class="courier" id="courier" aria-label="Courier view"></section>
 
   <!-- ================= LOG ================= -->
   <footer class="logbar">

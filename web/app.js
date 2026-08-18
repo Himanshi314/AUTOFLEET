@@ -34,6 +34,8 @@ const App = {
   chain: null,           // { root, spine, fill, cards:{}, order:[] }
   tiles: {},             // rendered impact values, for count-up
   pickedDriver: null,    // highlights the chosen driver on the map
+  view: 'ops',           // 'ops' (company) | 'courier' (the rider)
+  courierId: null,
   logCount: 0,
 };
 
@@ -225,6 +227,135 @@ function renderRisk() {
       <span class="rmeta t-${d.risk_band}">${(d.risk * 100).toFixed(0)}%<em>${esc(d.risk_band)}</em></span>
     </div>`).join('');
 }
+
+/* ============================================== COURIER DASHBOARD ========= */
+
+/* The operations view above is for the company. This is the same live state seen
+   by the person on the bike — their job, and when the chain releases them, the
+   support dispatched and their earnings protected. That turns the driver-welfare
+   claim into something visible rather than a bullet point. */
+
+const SHIFT_FULL_MIN = 240;
+
+function renderCourier() {
+  const host = $('#courier');
+  const st = App.state;
+  if (!st) return;
+
+  // Default to whoever is currently carrying something.
+  const carrying = st.deliveries.map((d) => d.driver_id);
+  if (!App.courierId || !st.drivers.some((d) => d.id === App.courierId)) {
+    App.courierId = carrying[0] || st.drivers[0].id;
+  }
+  const drv = st.drivers.find((d) => d.id === App.courierId);
+  const job = st.deliveries.find((d) => d.driver_id === drv.id);
+
+  const statusChip = {
+    on_route: ['chip-onroute', 'On route'],
+    available: ['chip-reassigned', 'Available'],
+    unavailable: ['chip-escalated', 'Unavailable'],
+  }[drv.status] || ['chip-onroute', drv.status];
+
+  const roster = st.drivers.map((d) => {
+    const badge = d.status === 'unavailable' ? 'down'
+      : carrying.includes(d.id) ? 'busy' : 'free';
+    return `<button class="cr-pick ${d.id === drv.id ? 'on' : ''} ${badge}"
+              data-driver="${esc(d.id)}">
+              <b>${esc(d.name.split(' ')[0])}</b>
+              <span>${esc(d.id)}</span>
+            </button>`;
+  }).join('');
+
+  // Welfare panel — only meaningful once the chain has actually released them.
+  const welfare = drv.status === 'unavailable' ? `
+    <div class="cr-welfare">
+      <div class="cr-welfare-h">You were released from this job — here's what happened</div>
+      <div class="cr-wrow"><i>⚠️</i><div><b>Reason logged:</b> ${esc(drv.unavailable_reason || '—')}</div></div>
+      <div class="cr-wrow"><i>🛠️</i><div><b>Support dispatched:</b> ${esc(drv.support_dispatched || 'none required')}</div></div>
+      <div class="cr-wrow ok"><i>✅</i><div><b>Earnings for the completed leg are protected.</b>
+        You are paid for the distance you covered.</div></div>
+      <div class="cr-wrow ok"><i>✅</i><div><b>No reliability penalty logged.</b>
+        This disruption was not your fault, so your on-time score is untouched.</div></div>
+    </div>` : '';
+
+  const jobCard = job ? `
+    <div class="cr-job">
+      <div class="cr-job-h">
+        <span class="cr-job-id">${esc(job.id)}</span>
+        <span class="chip ${CHIP[job.status] || 'chip-onroute'}">${esc(job.status)}</span>
+      </div>
+      <div class="cr-job-rows">
+        <div><span>Deliver to</span><b>${esc(job.recipient)}</b></div>
+        <div><span>Drop point</span><b>${esc(job.destination_name)}</b></div>
+        <div><span>Payload</span><b>${esc(job.payload)}</b></div>
+        <div><span>Arrive in</span><b class="cr-eta">${nf(job.eta_minutes, 0)} min</b></div>
+      </div>
+      ${job.cold_chain ? `<div class="cold ${job.cold_minutes_remaining < 75 ? 'tight' : ''}">
+        <span class="cold-k">Cold-chain window</span>
+        <span class="cold-v">${job.cold_minutes_remaining} min left</span></div>` : ''}
+      ${job.reassigned && job.driver_id === drv.id
+        ? `<div class="cr-note">You picked this up after another courier could not continue.
+             Collect the payload at the handover point marked on your route.</div>` : ''}
+    </div>`
+    : `<div class="cr-job empty">
+         <div class="cr-job-h"><span class="cr-job-id">No active job</span></div>
+         <p>You are ${drv.status === 'unavailable'
+            ? 'off the road. Dispatch has been notified and support is on the way.'
+            : 'available. The system will assign you the next job that fits your vehicle, load and shift.'}</p>
+       </div>`;
+
+  const shiftPct = Math.max(0, Math.min(100,
+    (drv.shift_remaining_minutes / SHIFT_FULL_MIN) * 100));
+
+  host.innerHTML = `
+    <div class="cr-roster">
+      <div class="cr-roster-k">Signed in as</div>
+      <div class="cr-roster-list">${roster}</div>
+    </div>
+
+    <div class="cr-main">
+      <div class="cr-id">
+        <div class="cr-avatar">${esc(drv.name.split(' ').map((w) => w[0]).join('').slice(0, 2))}</div>
+        <div class="cr-id-text">
+          <h2>${esc(drv.name)}</h2>
+          <p>${esc(drv.vehicle_label)} · ${esc(drv.id)}</p>
+        </div>
+        <span class="chip ${statusChip[0]}">${esc(statusChip[1])}</span>
+      </div>
+
+      <div class="cr-stats">
+        <div class="cr-stat"><div class="cv">${(drv.on_time_rate * 100).toFixed(0)}%</div>
+          <div class="ck">On-time record</div></div>
+        <div class="cr-stat"><div class="cv">${drv.active_load}/${drv.capacity}</div>
+          <div class="ck">Load</div></div>
+        <div class="cr-stat"><div class="cv">${nf(drv.shift_remaining_minutes, 0)}<small>min</small></div>
+          <div class="ck">Shift left</div>
+          <div class="bar b-nominal"><i style="width:${shiftPct.toFixed(0)}%"></i></div></div>
+        <div class="cr-stat"><div class="cv">${drv.cold_chain_capable ? 'Yes' : 'No'}</div>
+          <div class="ck">Cold-chain box</div></div>
+      </div>
+
+      ${welfare}
+      ${jobCard}
+    </div>`;
+}
+
+$('#courier').addEventListener('click', (e) => {
+  const b = e.target.closest('.cr-pick');
+  if (!b) return;
+  App.courierId = b.dataset.driver;
+  renderCourier();
+});
+
+$('#view-toggle').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-view]');
+  if (!b) return;
+  App.view = b.dataset.view;
+  document.querySelectorAll('#view-toggle button').forEach((x) =>
+    x.classList.toggle('on', x.dataset.view === App.view));
+  document.querySelector('.app').classList.toggle('view-courier', App.view === 'courier');
+  if (App.view === 'courier') renderCourier(); else renderMap();
+});
 
 /* ================================================================== MAP === */
 
@@ -856,6 +987,10 @@ function renderAll(bumpImpact) {
   renderImpact(App.state.impact, bumpImpact);
   renderFleet();
   renderRisk();
+  if (App.view === 'courier') {
+    renderCourier();
+    return;   // the map and fleet list are hidden in this view
+  }
   // Redraw the map on a light throttle — telemetry ticks every ~2s.
   const now = Date.now();
   if (now - mapDirty > 400) { mapDirty = now; renderMap(); }
