@@ -22,26 +22,42 @@ from .geo import CIRCUITY_FACTOR
 
 # --------------------------------------------------------------------------
 # Emission factors — kg CO2e per vehicle-km.
+# Verified against DEFRA/DESNZ 2025 (UK GHG conversion factors) and the CEA
+# CO2 Baseline Database v21.0 (India grid, FY24-25). 2w_petrol and van_diesel
+# were off in the previous revision — see EMISSION_SOURCES.
 # --------------------------------------------------------------------------
+
+INDIA_GRID_FACTOR_KG_PER_KWH = 0.7117  # CEA v21.0, FY24-25 weighted average
+EV_2W_KWH_PER_KM = 0.030  # estimate, not sourced
+EV_3W_KWH_PER_KM = 0.060  # estimate, not sourced
+
 EMISSION_FACTORS: Dict[str, float] = {
-    "2w_petrol": 0.0757,
-    "2w_electric": 0.0213,
-    "3w_electric": 0.0426,
-    "van_diesel": 0.2116,
-    "refrigerated_van": 0.2645,
+    "2w_petrol": 0.11367,
+    "2w_electric": round(EV_2W_KWH_PER_KM * INDIA_GRID_FACTOR_KG_PER_KWH, 4),
+    "3w_electric": round(EV_3W_KWH_PER_KM * INDIA_GRID_FACTOR_KG_PER_KWH, 4),
+    "van_diesel": 0.25561,
+    "refrigerated_van": round(0.25561 * 1.25, 4),
 }
 
 EMISSION_SOURCES: Dict[str, str] = {
-    "2w_petrol": "Tailpipe + upstream factor for an average petrol motorcycle "
-                 "(UK DEFRA/BEIS GHG conversion factor range). Verify against a "
-                 "local factor for your fleet.",
-    "2w_electric": "Derived: ~0.030 kWh/km x ~0.71 kg CO2e/kWh Indian grid "
-                   "emission factor (CEA CO2 baseline database order of magnitude).",
-    "3w_electric": "Derived: ~0.060 kWh/km x ~0.71 kg CO2e/kWh grid factor.",
-    "van_diesel": "Average diesel light-goods van, tailpipe + upstream "
-                  "(DEFRA/BEIS range).",
-    "refrigerated_van": "Diesel van factor plus ~25% for cold-chain refrigeration "
-                        "load. The 25% uplift is an assumption, not a measurement.",
+    "2w_petrol": "DEFRA/DESNZ 2025, Passenger vehicles > Motorbike (Average), "
+                 "0.11367 kg CO2e/km, tailpipe only. Old value (0.0757) was "
+                 "below DEFRA's own 'Small' motorbike band and didn't match "
+                 "any published line — fixed. No India-specific two-wheeler "
+                 "factor is publicly available, so DEFRA is the closest "
+                 "reference; re-check against the real fleet mix.",
+    "2w_electric": f"{EV_2W_KWH_PER_KM} kWh/km (estimate) x "
+                   f"{INDIA_GRID_FACTOR_KG_PER_KWH} kg CO2e/kWh (CEA v21.0, "
+                   f"FY24-25 grid average). Grid factor is sourced; the "
+                   f"kWh/km rate isn't.",
+    "3w_electric": f"{EV_3W_KWH_PER_KM} kWh/km (estimate) x "
+                   f"{INDIA_GRID_FACTOR_KG_PER_KWH} kg CO2e/kWh (same CEA "
+                   f"grid factor).",
+    "van_diesel": "DEFRA/DESNZ 2025, Delivery vehicles > Vans > Average "
+                  "(up to 3.5t) > Diesel, 0.25561 kg CO2e/km. Old value "
+                  "(0.2116) was below DEFRA's 'Class II' band — fixed.",
+    "refrigerated_van": "Diesel van factor above + 25% for cold-chain load. "
+                        "The 25% is still an assumption, not measured.",
 }
 
 # Minutes of human coordinator time consumed by one manual disruption
