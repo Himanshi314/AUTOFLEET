@@ -384,6 +384,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if route in ("/", "/index.html"):
                 self._file(WEB_ROOT / "index.html")
+            elif route in ("/react", "/react.html"):
+                # The Figma-derived React frontend, served alongside rather than
+                # instead of the dashboard. It mounts and streams, but does not
+                # yet render the agent feed, the router card, the tool call or
+                # the fact check — so it is not the demo default.
+                self._file(WEB_ROOT / "react.html")
             elif route.startswith("/static/"):
                 name = route[len("/static/"):]
                 target = (WEB_ROOT / name).resolve()
