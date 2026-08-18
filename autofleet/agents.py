@@ -385,6 +385,146 @@ _FALLBACKS = {
 
 _PICK_RE = re.compile(r"PICK\s*:\s*([A-Za-z]{2,3}-\d{1,4})", re.IGNORECASE)
 
+
+# --------------------------------------------------------------------------
+# A7 — the Resource Agent commits via a schema-validated tool call
+# --------------------------------------------------------------------------
+#
+# `strict: True` plus a forced tool_choice means the API guarantees the shape, so
+# the driver id arrives as a validated field rather than being scraped out of a
+# sentence with a regex. That regex was the most brittle seam in the chain: a
+# model that phrased its answer slightly differently silently fell through to the
+# top-ranked candidate. It survives only as the offline fallback path.
+REASSIGN_TOOL: Dict = {
+    "name": "reassign_delivery",
+    "description": (
+        "Commit this delivery to exactly one driver from the ranked candidates. "
+        "Call this once. The driver_id must be copied exactly from a candidate in "
+        "your input — never invented, never a driver that was excluded."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "driver_id": {
+                "type": "string",
+                "description": "driver_id of the chosen candidate, exactly as given.",
+            },
+            "rationale": {
+                "type": "string",
+                "description": (
+                    "One or two sentences naming the driver, their distance from "
+                    "the pickup point, and the single strongest reason drawn from "
+                    "the feature contributions. Plain prose, no markdown."
+                ),
+            },
+            "retained": {
+                "type": "boolean",
+                "description": (
+                    "True if this is the courier already assigned, i.e. the "
+                    "assignment is retained rather than moved."
+                ),
+            },
+        },
+        "required": ["driver_id", "rationale", "retained"],
+        "additionalProperties": False,
+    },
+}
+
+
+# --------------------------------------------------------------------------
+# A8 — Coordinator fact-check
+# --------------------------------------------------------------------------
+
+# Identifiers must be stripped before looking for numbers, or "D-102" parses as
+# the number -102 and every single incident fails its own fact check.
+_ID_RE = re.compile(r"\b[A-Za-z]{1,4}-\d+\b")
+
+# Captures comma-grouped numbers ("1,270") and notes a trailing percent sign, so a
+# risk stated as "55%" can be matched against a source stored as 0.55.
+_NUM_RE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?)\s*(%?)")
+
+# Small integers appear in ordinary prose ("one failed attempt", "a second trip")
+# and would produce constant false positives, so they are not treated as claims.
+_PROSE_INT_CEILING = 3
+
+
+def _numbers_in(text: str) -> List[float]:
+    """Numeric values in a string, ignoring identifiers like D-102 or DR-11."""
+    return [v for v, _ in _numbers_with_units(text)]
+
+
+def _numbers_with_units(text: str) -> List[tuple]:
+    """(value, is_percent) pairs, with identifiers removed first."""
+    cleaned = _ID_RE.sub(" ", text)
+    out = []
+    for raw, pct in _NUM_RE.findall(cleaned):
+        try:
+            out.append((float(raw.replace(",", "")), pct == "%"))
+        except ValueError:
+            pass
+    return out
+
+
+def _collect_source_numbers(payload) -> List[float]:
+    """Every number the Coordinator was actually given, recursively."""
+    found: List[float] = []
+    if isinstance(payload, dict):
+        for v in payload.values():
+            found += _collect_source_numbers(v)
+    elif isinstance(payload, (list, tuple)):
+        for v in payload:
+            found += _collect_source_numbers(v)
+    elif isinstance(payload, bool):
+        pass
+    elif isinstance(payload, (int, float)):
+        found.append(float(payload))
+    elif isinstance(payload, str):
+        found += _numbers_in(payload)
+    return found
+
+
+def verify_numbers(text: str, sources: List[float]) -> Dict:
+    """Check every number the Coordinator states against the numbers it was given.
+
+    The Coordinator's whole job is summarising other agents' decisions, which
+    makes it the highest hallucination risk in the chain — a fabricated ETA or a
+    fabricated CO2e figure would read exactly like a real one. This is cheap to
+    check mechanically, so it is checked on every incident.
+
+    A claim passes if it matches a source value exactly, or matches once either
+    side is rounded to the same precision (the model says "21 minutes" for 21.0,
+    "27.4 km" for 27.44).
+    """
+    def matches(candidate: float, s: float) -> bool:
+        if candidate == s:
+            return True
+        if round(candidate, 1) == round(s, 1):
+            return True
+        # Integer rounding must not apply below 1, or any two small fractions
+        # match each other (0.03 and 0.14 both round to 0) and a fabricated
+        # percentage sails through.
+        if abs(candidate) >= 1 and abs(s) >= 1 and round(candidate) == round(s):
+            return True
+        return s != 0 and abs(candidate - s) / abs(s) < 0.02
+
+    claims, unverified = [], []
+    for n, is_pct in _numbers_with_units(text):
+        # A bare small integer is usually prose ("a second trip"), but a small
+        # *percentage* is always a claim — so the exemption must not apply to it.
+        if not is_pct and abs(n) <= _PROSE_INT_CEILING and float(n).is_integer():
+            continue
+        claims.append(n)
+        # A percentage may be stated as "55%" against a source held as 0.55.
+        candidates = [n, n / 100.0] if is_pct else [n]
+        if not any(matches(c, s) for c in candidates for s in sources):
+            unverified.append(n)
+    return {
+        "claims_checked": len(claims),
+        "unverified": unverified,
+        "passed": not unverified,
+    }
+
 # Hard wall-clock budget for a whole incident. Past it, the chain stops asking the
 # model and finishes from deterministic model output instead.
 #
@@ -550,7 +690,12 @@ def run_chain(
     degraded_announced = False
     calls_made = 0
 
-    def run_agent(agent_id: str, *, extra: Optional[Dict], fallback: str) -> str:
+    tool_results: Dict[str, Optional[Dict]] = {}
+
+    def run_agent(
+        agent_id: str, *, extra: Optional[Dict], fallback: str,
+        tool: Optional[Dict] = None, fallback_tool_input: Optional[Dict] = None,
+    ) -> str:
         nonlocal degraded_announced, calls_made
         spec = SPEC_BY_ID[agent_id]
 
@@ -588,11 +733,22 @@ def run_chain(
             user=_user_prompt(incident=incident, prior=prior, extra=extra),
             fallback=fallback,
             force_fallback=over_budget,
+            tool=tool,
+            fallback_tool_input=fallback_tool_input,
         ):
             # Order matters: the terminal event also carries a "text" key, so test
             # for `done` first or the summary is mistaken for a delta.
             if event.get("done"):
                 text = event["text"]
+                if tool is not None:
+                    tool_results[agent_id] = event.get("tool_input")
+                    emit({
+                        "type": "tool_call",
+                        "agent": agent_id,
+                        "name": event.get("tool_name") or tool["name"],
+                        "input": event.get("tool_input"),
+                        "validated": event.get("source") == "live",
+                    })
                 emit({
                     "type": "agent_done", "agent": agent_id, "label": spec["label"],
                     "text": text, "ms": event.get("ms"),
@@ -651,19 +807,32 @@ def run_chain(
                 alternates,
         },
         fallback=fb("resource"),
+        tool=REASSIGN_TOOL,
+        fallback_tool_input={
+            "driver_id": ranking["candidates"][0]["driver_id"],
+            "rationale": _strip_pick(fb("resource")),
+            "retained": ranking["candidates"][0]["driver_id"] == incumbent_id,
+        },
     )
 
     by_id = {c["driver_id"]: c for c in ranking["candidates"]}
     chosen = None
     if resource_text:
-        match = _PICK_RE.search(resource_text)
-        chosen = by_id.get(match.group(1).upper()) if match else None
+        # Preferred path: a validated tool call carries the id as a field.
+        picked_id = (tool_results.get("resource") or {}).get("driver_id")
+        chosen = by_id.get(str(picked_id).upper()) if picked_id else None
+        if chosen is None:
+            # Legacy path, kept for the offline fallback and belt-and-braces: an
+            # id scraped out of prose.
+            match = _PICK_RE.search(resource_text)
+            chosen = by_id.get(match.group(1).upper()) if match else None
         if chosen is None:
             chosen = ranking["candidates"][0]
             emit({
                 "type": "log", "level": "warn",
-                "msg": f"{incident_id} · resource pick unparsed or ineligible; "
-                       f"defaulting to top-ranked candidate {chosen['driver_id']}.",
+                "msg": f"{incident_id} · resource pick missing or ineligible "
+                       f"(got {picked_id!r}); defaulting to top-ranked candidate "
+                       f"{chosen['driver_id']}.",
             })
         prior.append({"label": "Resource Agent", "text": _strip_pick(resource_text)})
     else:
@@ -743,7 +912,7 @@ def run_chain(
     # 6 — Coordinator
     if stale():
         return abort("coordinator")
-    coordinator_text = run_agent("coordinator", extra={
+    coordinator_extra = {
         "COMMITTED RESOLUTION (already applied to fleet state)": {
             "delivery_id": delivery_id,
             "reassigned": outcome["reassigned"],
@@ -761,11 +930,39 @@ def run_chain(
             "coordinator_minutes_saved": entry["coordinator_minutes_saved"],
             "doses_preserved": entry["doses_preserved"],
         },
-    }, fallback=_fallback_coordinator(world, incident, outcome, entry))
+    }
+    coordinator_text = run_agent(
+        "coordinator", extra=coordinator_extra,
+        fallback=_fallback_coordinator(world, incident, outcome, entry),
+    )
 
     summary = coordinator_text or _fallback_coordinator(world, incident, outcome, entry)
     if coordinator_text:
         prior.append({"label": "Coordinator Agent", "text": coordinator_text})
+
+    # A8 — the Coordinator summarises, which makes it the highest hallucination
+    # risk in the chain. Every number it states must appear in what it was given.
+    check = verify_numbers(
+        summary,
+        _collect_source_numbers(coordinator_extra)
+        + _collect_source_numbers(incident)
+        + [p for p in (outcome["eta_minutes"], entry["km_avoided"],
+                       entry["co2e_kg_avoided"], entry["coordinator_minutes_saved"])],
+    )
+    emit({
+        "type": "verification",
+        "agent": "coordinator",
+        "claims_checked": check["claims_checked"],
+        "unverified": check["unverified"],
+        "passed": check["passed"],
+    })
+    if not check["passed"]:
+        emit({
+            "type": "log", "level": "error",
+            "msg": f"{incident_id} · FACT CHECK FAILED · the Coordinator stated "
+                   f"{check['unverified']} which appear nowhere in its input. "
+                   f"Treat that summary as unreliable.",
+        })
 
     elapsed = time.perf_counter() - started
     risk_after = world.risk_for(delivery_id)

@@ -637,6 +637,59 @@ body::after {
   font-size: 10.5px; line-height: 1.6; color: var(--ink-3);
 }
 
+/* --- the Resource Agent's tool invocation --- */
+.kcard {
+  margin-bottom: 12px; position: relative;
+  border: 1px solid rgba(139,147,248,.24); border-radius: var(--r);
+  background: rgba(139,147,248,.05); padding: 9px 12px 10px;
+  animation: rise .4s var(--spring);
+}
+.kcard::before {
+  content: ""; position: absolute; left: -22.5px; top: 13px;
+  width: 6px; height: 6px; border-radius: 1px; background: var(--indigo);
+  box-shadow: 0 0 7px rgba(139,147,248,.7);
+}
+.kc-tag {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--indigo);
+}
+.kc-sig {
+  font-family: var(--mono); font-size: 11px; margin-top: 6px;
+  color: var(--ink-2); word-break: break-word;
+}
+.kc-sig b { color: var(--indigo); font-weight: 600; }
+.tk-k { color: var(--ink-3); }
+.tk-v { color: var(--teal); }
+.tk-c { color: var(--ink-4); }
+
+/* --- coordinator fact check --- */
+.vcard {
+  margin-bottom: 12px; position: relative;
+  display: flex; align-items: flex-start; gap: 8px;
+  border-radius: var(--r); padding: 9px 12px;
+  font-size: 10.5px; line-height: 1.55;
+  animation: rise .4s var(--spring);
+}
+.vcard::before {
+  content: ""; position: absolute; left: -22.5px; top: 13px;
+  width: 6px; height: 6px; border-radius: 50%;
+}
+.vcard.ok {
+  border: 1px solid rgba(52,211,153,.28); background: rgba(52,211,153,.06);
+  color: var(--ink-2);
+}
+.vcard.ok::before { background: var(--emerald); box-shadow: 0 0 7px var(--emerald); }
+.vcard.ok .vc-tick { color: var(--emerald); }
+.vcard.ok b { color: var(--emerald); }
+.vcard.bad {
+  border: 1px solid rgba(251,113,133,.42); background: rgba(251,113,133,.09);
+  color: var(--ink);
+}
+.vcard.bad::before { background: var(--rose); box-shadow: 0 0 8px var(--rose); }
+.vcard.bad .vc-tick { color: var(--rose); }
+.vcard.bad b { color: var(--rose); }
+.vc-tick { font-weight: 700; font-size: 12px; flex: none; line-height: 1.35; }
+
 /* --- a role the router switched off --- */
 .acard.skipped {
   border-style: dashed; opacity: .42;

@@ -457,6 +457,38 @@ function skippedCard(ev) {
   c.spine.appendChild(card);
 }
 
+/* The Resource Agent doesn't describe a reassignment — it invokes one. Showing
+   the actual call is the clearest answer to "your agents just write sentences". */
+function toolCallCard(ev) {
+  const c = App.chain; if (!c) return;
+  const args = Object.entries(ev.input || {})
+    .filter(([k]) => k !== 'rationale')
+    .map(([k, v]) => `<span class="tk-k">${esc(k)}</span>=<span class="tk-v">${esc(JSON.stringify(v))}</span>`)
+    .join('<span class="tk-c">, </span>');
+  const card = el('div', 'kcard');
+  card.innerHTML =
+    `<div class="kc-head">
+       <span class="kc-tag">${ev.validated ? 'schema-validated tool call' : 'tool call · deterministic'}</span>
+     </div>
+     <div class="kc-sig"><b>${esc(ev.name)}</b>(${args})</div>`;
+  c.spine.appendChild(card);
+}
+
+/* Every number the Coordinator states is checked against the numbers it was
+   given. It summarises, so it is the highest hallucination risk in the chain. */
+function verificationBadge(ev) {
+  const c = App.chain; if (!c) return;
+  const card = el('div', 'vcard ' + (ev.passed ? 'ok' : 'bad'));
+  card.innerHTML = ev.passed
+    ? `<span class="vc-tick">✓</span><span>Facts verified — all
+         <b>${ev.claims_checked}</b> figures in the summary trace to its input</span>`
+    : `<span class="vc-tick">!</span><span>Fact check <b>failed</b> —
+         ${esc(JSON.stringify(ev.unverified))} appear nowhere in the input.
+         Treat this summary as unreliable.</span>`;
+  c.spine.appendChild(card);
+  feedEl().scrollTop = 0;
+}
+
 function agentStart(ev) {
   const c = App.chain; if (!c) return;
   const card = el('div', 'acard active');
@@ -892,6 +924,8 @@ function handle(ev) {
       break;
 
     case 'plan':             planCard(ev); break;
+    case 'tool_call':        toolCallCard(ev); break;
+    case 'verification':     verificationBadge(ev); break;
     case 'agent_start':      agentStart(ev); break;
     case 'agent_delta':      agentDelta(ev); break;
     case 'agent_done':       agentDone(ev); break;

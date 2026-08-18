@@ -85,12 +85,24 @@ class LLM:
     # ----------------------------------------------------------------------
 
     def stream(
-        self, *, system: str, user: str, fallback: str, force_fallback: bool = False
+        self,
+        *,
+        system: str,
+        user: str,
+        fallback: str,
+        force_fallback: bool = False,
+        tool: Optional[Dict] = None,
+        fallback_tool_input: Optional[Dict] = None,
     ) -> Iterator[Dict]:
         """Yield {'text': str} deltas, then one {'done': True, ...} summary.
 
         `force_fallback` is set by the chain when its wall-clock budget is spent:
         stop asking the model and emit the deterministic answer immediately.
+
+        `tool` turns the call into a forced, schema-validated tool invocation
+        instead of free prose — the agent *takes* an action rather than describing
+        one. The terminal event then carries `tool_input`, already validated
+        against the schema, so nothing has to be parsed out of prose.
         """
         if not self.live or force_fallback:
             note = (
@@ -98,7 +110,16 @@ class LLM:
                 "language layer."
                 if force_fallback else None
             )
-            yield from self._stream_fallback(fallback, note=note)
+            yield from self._stream_fallback(
+                fallback, note=note, tool_input=fallback_tool_input
+            )
+            return
+
+        if tool is not None:
+            yield from self._stream_tool(
+                system=system, user=user, tool=tool,
+                fallback=fallback, fallback_tool_input=fallback_tool_input,
+            )
             return
 
         started = time.perf_counter()
@@ -169,7 +190,78 @@ class LLM:
                 "note": f"Live call failed ({detail}); used deterministic fallback.",
             }
 
-    def _stream_fallback(self, fallback: str, note: Optional[str] = None) -> Iterator[Dict]:
+    def _stream_tool(
+        self, *, system: str, user: str, tool: Dict,
+        fallback: str, fallback_tool_input: Optional[Dict],
+    ) -> Iterator[Dict]:
+        """Force one schema-validated tool call and return its validated input.
+
+        `strict: True` plus a forced `tool_choice` means the model cannot reply
+        with prose or a malformed shape — the API guarantees the input matches the
+        schema. That removes the regex that used to scrape `PICK: DR-11` out of a
+        sentence, which was the most brittle seam in the chain.
+        """
+        started = time.perf_counter()
+        try:
+            with self._client.messages.stream(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system,
+                output_config={"effort": EFFORT},
+                tools=[tool],
+                tool_choice={"type": "tool", "name": tool["name"]},
+                messages=[{"role": "user", "content": user}],
+            ) as stream:
+                # Drain the raw events so the SDK's timeout protection applies;
+                # the useful payload is on the assembled final message.
+                for _ in stream:
+                    pass
+                final = stream.get_final_message()
+
+            call = next(
+                (b for b in final.content if getattr(b, "type", None) == "tool_use"),
+                None,
+            )
+            if call is None or not isinstance(getattr(call, "input", None), dict):
+                raise ValueError("model returned no tool_use block")
+
+            data = call.input
+            text = str(data.get("rationale") or "").strip() or fallback
+            usage = getattr(final, "usage", None)
+            yield {"text": text}
+            yield {
+                "done": True,
+                "text": text,
+                "tool_input": data,
+                "tool_name": tool["name"],
+                "ms": int((time.perf_counter() - started) * 1000),
+                "source": "live",
+                "model": getattr(final, "model", MODEL),
+                "tokens": {
+                    "input": getattr(usage, "input_tokens", None),
+                    "output": getattr(usage, "output_tokens", None),
+                } if usage else None,
+            }
+            return
+
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"[:160]
+            yield {"text": fallback}
+            yield {
+                "done": True,
+                "text": fallback,
+                "tool_input": fallback_tool_input,
+                "tool_name": tool["name"],
+                "ms": int((time.perf_counter() - started) * 1000),
+                "source": "fallback",
+                "note": f"Tool call failed ({detail}); used the ranker's top "
+                        f"candidate instead.",
+            }
+
+    def _stream_fallback(
+        self, fallback: str, note: Optional[str] = None,
+        tool_input: Optional[Dict] = None,
+    ) -> Iterator[Dict]:
         started = time.perf_counter()
         # No typing delay when degrading — the point is to finish fast.
         delay = 0.0 if note else 0.018
@@ -181,6 +273,7 @@ class LLM:
         yield {
             "done": True,
             "text": fallback,
+            "tool_input": tool_input,
             "ms": int((time.perf_counter() - started) * 1000),
             "source": "degraded" if note else "fallback",
             "note": note or "Deterministic text derived from computed fleet state.",
