@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from autofleet.agents import AGENT_SPECS, run_chain
 from autofleet.impact import ASSUMPTIONS, EMISSION_FACTORS, EMISSION_SOURCES
-from autofleet.llm import LLM
+from autofleet.llm import make_llm
 from autofleet.scoring import MODEL_CARDS
 from autofleet.world import DISRUPTIONS, World
 
@@ -82,7 +82,7 @@ class Engine:
     def __init__(self) -> None:
         self.bus = EventBus()
         self.world = World(mode="commercial")
-        self.llm = LLM()
+        self.llm = make_llm()
         self.autonomous = False
         self.incidents: queue.Queue = queue.Queue()
         self._auto_fired: set[str] = set()
