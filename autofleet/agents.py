@@ -688,6 +688,9 @@ def run_chain(
     runs = set(plan["agents"])
     skip_reason = {s["agent"]: s["reason"] for s in plan["skipped"]}
     degraded_announced = False
+    # Real model calls attempted. Incremented only when the language layer is
+    # actually invoked — a call forced to the deterministic fallback (over
+    # budget, or no live provider) does NOT hit an API and must not be counted.
     calls_made = 0
 
     tool_results: Dict[str, Optional[Dict]] = {}
@@ -726,7 +729,8 @@ def run_chain(
             "type": "agent_start", "agent": agent_id, "label": spec["label"],
             "icon": spec["icon"], "owns": spec["owns"],
         })
-        calls_made += 1
+        if llm.live and not over_budget:
+            calls_made += 1
         text = ""
         for event in llm.stream(
             system=_system_for(spec, world),
@@ -888,7 +892,10 @@ def run_chain(
         disruption_key=disruption_key, chosen=chosen, reroute=chosen_route,
         new_eta=new_eta, support=dis["driver_support"],
         handover_at=requirement["pickup"] if will_reassign else None,
-        llm_calls_used=calls_made, llm_calls_saved=plan["saved"],
+        # len(runs), not calls_made: this ledger line is written before the
+        # coordinator runs, so calls_made would undercount the chain by one.
+        # The pair is the router's efficiency claim and must sum to ALL_AGENTS.
+        llm_calls_used=len(runs), llm_calls_saved=plan["saved"],
     )
     entry = outcome["impact_entry"]
     emit({"type": "state", "state": world.snapshot()})
