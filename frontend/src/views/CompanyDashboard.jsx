@@ -18,13 +18,14 @@ import {
   Filter
 } from 'lucide-react';
 
-export function CompanyDashboard({ 
-  fleetState, 
-  fleetMeta, 
-  onTriggerDisruption, 
-  activeChain, 
-  pickedDriver, 
-  setPickedDriver 
+export function CompanyDashboard({
+  fleetState,
+  fleetMeta,
+  impactSeries = [],
+  onTriggerDisruption,
+  activeChain,
+  pickedDriver,
+  setPickedDriver
 }) {
   const [selectedDeliveryId, setSelectedDeliveryId] = useState(null);
   const [filterRiskOnly, setFilterRiskOnly] = useState(false);
@@ -234,55 +235,78 @@ export function CompanyDashboard({
             </div>
           </div>
 
-          {/* Delivery Volume & Disruption Trend Chart Card */}
+          {/* Cumulative avoided-redelivery distance, one point per resolved
+              incident, read straight from the server's impact ledger. There is
+              no hourly history to plot — the server keeps running totals, not a
+              time series — so this axis is incident number, not clock time, and
+              it is empty until the first incident actually resolves. */}
           <div className="card" style={{ padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div>
                 <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-main)' }}>
-                  Active Hourly Dispatch Volume &amp; Disruption Rate
+                  Cumulative Redelivery Distance Avoided
                 </h4>
                 <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  Peak traffic vs autonomous resolution efficiency over 24h
+                  One point per resolved incident &middot; from the impact ledger
                 </p>
               </div>
               <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                Today (08:00 - 20:00)
+                {impactSeries.length
+                  ? `${impactSeries.length} incident${impactSeries.length === 1 ? '' : 's'} this session`
+                  : 'no data yet'}
               </span>
             </div>
 
-            {/* Smooth SVG Sparkline */}
-            <div style={{ height: 90, width: '100%' }}>
-              <svg viewBox="0 0 500 90" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
-                <defs>
-                  <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#34D399" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#34D399" stopOpacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <path 
-                  d="M 0 70 Q 60 65, 120 45 T 240 30 T 360 40 T 500 20 L 500 90 L 0 90 Z" 
-                  fill="url(#chartGrad)" 
-                />
-                <path 
-                  d="M 0 70 Q 60 65, 120 45 T 240 30 T 360 40 T 500 20" 
-                  fill="none" 
-                  stroke="#10B981" 
-                  strokeWidth="2.5" 
-                />
-                {/* Hourly tick marks */}
-                {[0, 100, 200, 300, 400, 500].map((x, i) => (
-                  <circle key={x} cx={x} cy={70 - i * 10 + (i % 2) * 15} r={3} fill="#1E3A2B" />
-                ))}
-              </svg>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-              <span>08:00</span>
-              <span>11:00</span>
-              <span>14:00</span>
-              <span>17:00</span>
-              <span>19:00 (Peak)</span>
-              <span>21:00</span>
-            </div>
+            {impactSeries.length < 2 ? (
+              <div style={{
+                height: 90, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                textAlign: 'center', fontSize: 11, color: 'var(--text-muted)',
+                border: '1px dashed var(--border)', borderRadius: 8, padding: '0 16px'
+              }}>
+                {impactSeries.length === 0
+                  ? 'Nothing resolved yet this session. Trigger a disruption and this plots the ledger as it fills.'
+                  : `First incident logged ${impactSeries[0].km.toFixed(1)} km avoided. A second is needed before a trend can be drawn.`}
+              </div>
+            ) : (
+              <>
+                <div style={{ height: 90, width: '100%' }}>
+                  <svg viewBox="0 0 500 90" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
+                    <defs>
+                      <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#34D399" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="#34D399" stopOpacity="0.0" />
+                      </linearGradient>
+                    </defs>
+                    {(() => {
+                      const max = Math.max(...impactSeries.map(p => p.km)) || 1;
+                      const pts = impactSeries.map((p, i) => {
+                        const x = (i / (impactSeries.length - 1)) * 500;
+                        const y = 82 - (p.km / max) * 74;
+                        return [x, y];
+                      });
+                      const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+                      return (
+                        <>
+                          <path d={`${line} L 500 90 L 0 90 Z`} fill="url(#chartGrad)" />
+                          <path d={line} fill="none" stroke="#10B981" strokeWidth="2.5" />
+                          {pts.map(([x, y], i) => (
+                            <circle key={i} cx={x} cy={y} r={3} fill="#1E3A2B" />
+                          ))}
+                        </>
+                      );
+                    })()}
+                  </svg>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                  <span>incident 1</span>
+                  <span className="mono">
+                    {impactSeries[impactSeries.length - 1].km.toFixed(1)} km &middot;{' '}
+                    {impactSeries[impactSeries.length - 1].co2e.toFixed(2)} kg CO&#8322;e avoided
+                  </span>
+                  <span>incident {impactSeries.length}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

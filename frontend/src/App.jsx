@@ -33,7 +33,8 @@ function AppContent() {
     triggerDisruption,
     switchMode,
     setAutonomous,
-    resetFleet
+    resetFleet,
+    impactSeries
   } = useFleetStream();
 
   // Keep route synced with browser history and hash
@@ -93,9 +94,10 @@ function AppContent() {
     // Company / Operations Routes
     if (route === '/company/dashboard') {
       return (
-        <CompanyDashboard 
+        <CompanyDashboard
           fleetState={fleetState}
           fleetMeta={fleetMeta}
+          impactSeries={impactSeries}
           onTriggerDisruption={triggerDisruption}
           activeChain={activeChain}
           pickedDriver={pickedDriver}
@@ -135,6 +137,7 @@ function AppContent() {
       <CompanyDashboard 
         fleetState={fleetState}
         fleetMeta={fleetMeta}
+        impactSeries={impactSeries}
         onTriggerDisruption={triggerDisruption}
         activeChain={activeChain}
         pickedDriver={pickedDriver}

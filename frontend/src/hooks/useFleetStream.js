@@ -10,6 +10,7 @@ export function useFleetStream() {
   const [currentAlert, setCurrentAlert] = useState(null);
   const [pickedDriver, setPickedDriver] = useState(null);
   const [activeIncidentCount, setActiveIncidentCount] = useState(0);
+  const [impactSeries, setImpactSeries] = useState([]);
 
   const eventSourceRef = useRef(null);
 
@@ -98,6 +99,23 @@ export function useFleetStream() {
         if (ev.type === 'reset') {
           setActiveChain(null);
           setCurrentAlert(null);
+          setImpactSeries([]);
+        }
+        break;
+
+      // One point per resolved incident, carrying the ledger's own totals.
+      // This is the only time-ordered history the client has: the server keeps
+      // totals, not a series, so it is accumulated here as incidents land.
+      // Nothing is interpolated or back-filled — an empty demo plots nothing.
+      case 'impact':
+        if (ev.totals) {
+          setImpactSeries(prev => [...prev, {
+            n: (ev.totals.incidents_resolved ?? prev.length + 1),
+            km: ev.totals.km_avoided ?? 0,
+            co2e: ev.totals.co2e_kg_avoided ?? 0,
+            minutes: ev.totals.coordinator_minutes_saved ?? 0,
+            delivery_id: ev.entry?.delivery_id || '',
+          }]);
         }
         break;
 
