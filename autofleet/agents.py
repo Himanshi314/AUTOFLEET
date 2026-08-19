@@ -467,6 +467,34 @@ _NUM_RE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?)\s*(%?)")
 _PROSE_INT_CEILING = 3
 
 
+def _candidates_for_prompt(candidates: List[Dict]) -> List[Dict]:
+    """Trim the ranking payload before it goes into a prompt.
+
+    Each candidate carries a `contributions` array — the per-feature score
+    breakdown — at about 1.1k characters apiece. That exists for the UI's
+    explainability panel, which receives the FULL ranking over the
+    `reassignment.rank` event and is unaffected by this.
+
+    Sending it to the model as well cost ~3,200 tokens on the Resource turn
+    alone: its prompt measured 13,170 characters against 1,200-2,500 for every
+    other agent. On Groq's 8,000-tokens-per-minute free tier that single call
+    was eating a third of the budget, which is what pushed the last two agents
+    of a six-agent chain into 429s.
+
+    The agent does not need the breakdown to justify a pick — `suitability`,
+    `decisive_factor` and the raw distance/ETA/on-time figures say the same
+    thing far more cheaply. The top candidate keeps its full breakdown so the
+    winning choice can still be explained in feature terms.
+    """
+    trimmed = []
+    for i, c in enumerate(candidates):
+        if i == 0:
+            trimmed.append(c)
+            continue
+        trimmed.append({k: v for k, v in c.items() if k != "contributions"})
+    return trimmed
+
+
 def _numbers_in(text: str) -> List[float]:
     """Numeric values in a string, ignoring identifiers like D-102 or DR-11."""
     return [v for v, _ in _numbers_with_units(text)]
@@ -743,16 +771,26 @@ def run_chain(
                        f"resolution still completes, without the language layer",
             })
 
+        # The handoff is the whole claim of a "chain", and it is invisible in the
+        # UI unless it is published: every agent's prompt literally contains the
+        # preceding agents' conclusions (see _user_prompt -> _prior_block). Ship
+        # that list so a reader can confirm agent N received agent N-1's words
+        # verbatim, rather than taking the arrows in the diagram on faith. This
+        # is the same `prior` object handed to the model, not a paraphrase.
+        prompt = _user_prompt(incident=incident, prior=prior, extra=extra)
         emit({
             "type": "agent_start", "agent": agent_id, "label": spec["label"],
             "icon": spec["icon"], "owns": spec["owns"],
+            "received": [dict(p) for p in prior],
+            "prompt_chars": len(prompt),
+            "extra_keys": sorted(extra.keys()) if extra else [],
         })
         if llm.live and not over_budget:
             calls_made += 1
         text = ""
         for event in llm.stream(
             system=_system_for(spec, world),
-            user=_user_prompt(incident=incident, prior=prior, extra=extra),
+            user=prompt,
             fallback=fallback,
             force_fallback=over_budget,
             tool=tool,
@@ -821,7 +859,7 @@ def run_chain(
                 "pickup_point": requirement["pickup_label"],
                 "model": ranking["model"],
                 "feature_weights": ranking["weights"],
-                "candidates": ranking["candidates"][:5],
+                "candidates": _candidates_for_prompt(ranking["candidates"][:5]),
                 "excluded": ranking["rejected"][:6],
                 "incumbent_driver_id": incumbent_id,
             },

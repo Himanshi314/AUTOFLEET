@@ -177,6 +177,11 @@ class Engine:
                     "key": k, "label": v["label"], "icon": v["icon"],
                     "severity": v["severity"],
                     "detected_as": v["detected_as"],
+                    # Who physically observes the problem first. This decides
+                    # which dashboard can raise it: a rider cannot report
+                    # corridor gridlock, and ops cannot see a damaged parcel.
+                    "reported_by": v["reported_by"],
+                    "reported_why": v["reported_why"],
                     "modes": (
                         ["humanitarian"] if k == "cold_chain_breach"
                         else ["commercial", "humanitarian"]

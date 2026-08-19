@@ -78,6 +78,12 @@
         </div>
         <div class="map-wrap">
           <svg id="map" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Fleet map"></svg>
+          <div class="map-zoom" role="group" aria-label="Map zoom">
+            <button id="map-in" title="Zoom in (or scroll / double-click the map)" aria-label="Zoom in">+</button>
+            <span class="mono" id="map-zoom-label">1.0&times;</span>
+            <button id="map-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+            <button id="map-reset" title="Back to the whole city" aria-label="Reset zoom" disabled>Fit</button>
+          </div>
           <div class="map-foot" id="map-foot"></div>
         </div>
       </div>

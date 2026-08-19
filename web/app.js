@@ -37,7 +37,114 @@ const App = {
   view: 'ops',           // 'ops' (company) | 'courier' (the rider)
   courierId: null,
   logCount: 0,
+  // Map camera. Lives OUTSIDE renderMap because renderMap() wipes and rebuilds
+  // the SVG on every state tick — holding zoom in the DOM would reset it to
+  // fully-zoomed-out roughly once a second while you were trying to look.
+  mapView: { z: 1, cx: 500, cy: 300 },
 };
+
+/* ============================================================== MAP CAMERA == */
+
+const MAP_W = 1000, MAP_H = 600;
+const MAP_ZOOM_MIN = 1, MAP_ZOOM_MAX = 8;
+
+function clampCamera() {
+  const v = App.mapView;
+  v.z = Math.min(MAP_ZOOM_MAX, Math.max(MAP_ZOOM_MIN, v.z));
+  const w = MAP_W / v.z, h = MAP_H / v.z;
+  // Keep the viewport inside the map so you can never pan off into blank space.
+  v.cx = Math.min(MAP_W - w / 2, Math.max(w / 2, v.cx));
+  v.cy = Math.min(MAP_H - h / 2, Math.max(h / 2, v.cy));
+  return v;
+}
+
+function applyCamera() {
+  const svg = $('#map');
+  if (!svg) return;
+  const v = clampCamera();
+  const w = MAP_W / v.z, h = MAP_H / v.z;
+  svg.setAttribute('viewBox', `${v.cx - w / 2} ${v.cy - h / 2} ${w} ${h}`);
+  const btn = $('#map-zoom-label');
+  if (btn) btn.textContent = v.z.toFixed(1) + '×';
+  const reset = $('#map-reset');
+  if (reset) reset.disabled = v.z === 1;
+}
+
+/** Client pixel -> base map coordinate, so wheel-zoom can hold a point still. */
+function mapPointFromEvent(e) {
+  const svg = $('#map');
+  const r = svg.getBoundingClientRect();
+  const v = clampCamera();
+  const w = MAP_W / v.z, h = MAP_H / v.z;
+  // The SVG uses preserveAspectRatio=xMidYMid meet, so the drawn area is
+  // letterboxed inside the element; ignoring that makes the cursor drift.
+  const scale = Math.min(r.width / w, r.height / h);
+  const drawnW = w * scale, drawnH = h * scale;
+  const offX = (r.width - drawnW) / 2, offY = (r.height - drawnH) / 2;
+  return [
+    (v.cx - w / 2) + (e.clientX - r.left - offX) / scale,
+    (v.cy - h / 2) + (e.clientY - r.top - offY) / scale,
+  ];
+}
+
+function zoomMap(factor, anchor) {
+  const v = App.mapView;
+  const before = anchor || [v.cx, v.cy];
+  const z0 = v.z;
+  v.z = Math.min(MAP_ZOOM_MAX, Math.max(MAP_ZOOM_MIN, v.z * factor));
+  if (v.z === z0) return;
+  if (anchor) {
+    // Hold the anchor point under the cursor: shift the centre by the residual.
+    const k = 1 - z0 / v.z;
+    v.cx += (before[0] - v.cx) * k;
+    v.cy += (before[1] - v.cy) * k;
+  }
+  renderMap();
+}
+
+function resetMapCamera() {
+  App.mapView = { z: 1, cx: MAP_W / 2, cy: MAP_H / 2 };
+  renderMap();
+}
+
+function wireMapCamera() {
+  const svg = $('#map');
+  if (!svg || svg.dataset.camWired) return;
+  svg.dataset.camWired = '1';
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomMap(e.deltaY < 0 ? 1.18 : 1 / 1.18, mapPointFromEvent(e));
+  }, { passive: false });
+
+  let drag = null;
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    drag = { at: mapPointFromEvent(e), cx: App.mapView.cx, cy: App.mapView.cy };
+    svg.setPointerCapture(e.pointerId);
+    svg.classList.add('grabbing');
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const now = mapPointFromEvent(e);
+    App.mapView.cx = drag.cx - (now[0] - drag.at[0]);
+    App.mapView.cy = drag.cy - (now[1] - drag.at[1]);
+    applyCamera();
+  });
+  const endDrag = (e) => {
+    if (!drag) return;
+    drag = null;
+    svg.classList.remove('grabbing');
+    try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+    renderMap();   // redraw so label/marker sizes match the final zoom
+  };
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    zoomMap(1.8, mapPointFromEvent(e));
+  });
+}
 
 /* =========================================================== IMPACT STRIP == */
 
@@ -111,9 +218,17 @@ const CHIP = {
   'Awaiting Driver': 'chip-awaiting',
 };
 
-function disruptionsForMode() {
+/* A disruption can only be raised where somebody can actually observe it.
+   The rider is on the bike and at the door, so breakdowns, no-answers, bad
+   addresses and damaged parcels are reported from the courier app. Corridor
+   gridlock, double-booked jobs, priority injections and probe telemetry come
+   from feeds no rider can see, so those surface on the operations desk.
+   Same queue, same agent chain, different origin — which is the point. */
+function disruptionsForMode(reporter) {
   const mode = App.state.mode;
-  return (App.meta.disruptions || []).filter((d) => d.modes.includes(mode));
+  return (App.meta.disruptions || []).filter(
+    (d) => d.modes.includes(mode) && (!reporter || d.reported_by === reporter)
+  );
 }
 
 function renderFleet() {
@@ -121,7 +236,9 @@ function renderFleet() {
   const st = App.state;
   $('#fleet-kind').textContent = st.mode === 'humanitarian' ? 'consignments' : 'deliveries';
 
-  const triggers = disruptionsForMode();
+  // Operations only raises what operations can detect. Courier-observed issues
+  // arrive from the Courier view instead.
+  const triggers = disruptionsForMode('system');
 
   // Drop cards for deliveries that no longer exist (e.g. after a mode switch).
   const live = new Set(st.deliveries.map((d) => d.id));
@@ -307,6 +424,40 @@ function renderCourier() {
   const shiftPct = Math.max(0, Math.min(100,
     (drv.shift_remaining_minutes / SHIFT_FULL_MIN) * 100));
 
+  /* Where a disruption actually starts. In the field the rider is the sensor:
+     they know the bike died or nobody answered before any system does. Raising
+     it here rather than on the operations desk is the honest flow, and it makes
+     the demo tell the truth — the rider reports, the chain resolves, ops watches
+     it happen. Disabled with a reason when there is nothing to report against. */
+  const reportable = disruptionsForMode('courier');
+  const canReport = !!job && drv.status !== 'unavailable';
+  const reportPanel = `
+    <div class="cr-report">
+      <div class="cr-report-h">
+        <div>
+          <h3>Report a problem</h3>
+          <p>${canReport
+            ? `Tap what you're seeing. It goes straight to the agent chain — no phone call, no waiting for dispatch.`
+            : (drv.status === 'unavailable'
+              ? `You've already been released from this job. Support is on the way.`
+              : `Nothing to report — you have no active job right now.`)}</p>
+        </div>
+      </div>
+      <div class="cr-report-grid">
+        ${reportable.map((d) => `
+          <button class="cr-rbtn" data-disruption="${esc(d.key)}"
+                  data-job="${esc(job ? job.id : '')}"
+                  title="${esc(d.reported_why || '')}"
+                  ${canReport ? '' : 'disabled'}>
+            <i>${d.icon}</i><span>${esc(d.label)}</span>
+          </button>`).join('')}
+      </div>
+      <div class="cr-report-foot">
+        Corridor gridlock, double-booked jobs and priority overrides aren't here —
+        you can't see those from the saddle. The operations desk raises them.
+      </div>
+    </div>`;
+
   host.innerHTML = `
     <div class="cr-roster">
       <div class="cr-roster-k">Signed in as</div>
@@ -337,14 +488,28 @@ function renderCourier() {
 
       ${welfare}
       ${jobCard}
+      ${reportPanel}
     </div>`;
 }
 
 $('#courier').addEventListener('click', (e) => {
-  const b = e.target.closest('.cr-pick');
-  if (!b) return;
-  App.courierId = b.dataset.driver;
-  renderCourier();
+  const pick = e.target.closest('.cr-pick');
+  if (pick) {
+    App.courierId = pick.dataset.driver;
+    renderCourier();
+    return;
+  }
+  // A rider raising a problem from the field. trigger='courier' so the log and
+  // the incident card show where it came from — a report, not a console click.
+  const report = e.target.closest('.cr-rbtn');
+  if (report && !report.disabled && report.dataset.job) {
+    report.classList.add('sent');
+    post('/api/disrupt', {
+      delivery_id: report.dataset.job,
+      disruption: report.dataset.disruption,
+      trigger: 'courier',
+    });
+  }
 });
 
 $('#view-toggle').addEventListener('click', (e) => {
@@ -373,10 +538,17 @@ function renderMap() {
   const svg = $('#map');
   const st = App.state;
   const map = st.map;
-  const W = 1000, H = 600;
+  const W = MAP_W, H = MAP_H;
   const P = svg.clientWidth < 520 ? 34 : 56;
   const proj = projector(map.bounds, W, H, P);
   svg.innerHTML = '';
+
+  // Zooming the viewBox magnifies everything, including 9px labels and 4px dots,
+  // which turns a zoomed-in map into a screen of giant text. Counter-scale every
+  // size by the zoom so glyphs and markers keep their on-screen size and only
+  // the geography spreads out. Stroke widths are handled in CSS by
+  // vector-effect: non-scaling-stroke.
+  const k = 1 / clampCamera().z;
 
   const gRoads = svgEl('g'), gNodes = svgEl('g'),
         gRoutes = svgEl('g'), gMarks = svgEl('g');
@@ -398,16 +570,18 @@ function renderMap() {
     const key = n.kind === 'hub' || n.kind === 'phc';
     if (n.kind === 'hub') {
       gNodes.appendChild(svgEl('rect', {
-        x: x - 4.5, y: y - 4.5, width: 9, height: 9, rx: 2, class: 'node-hub',
+        x: x - 4.5 * k, y: y - 4.5 * k, width: 9 * k, height: 9 * k,
+        rx: 2 * k, class: 'node-hub',
       }));
     } else {
       gNodes.appendChild(svgEl('circle', {
-        cx: x, cy: y, r: key ? 3.6 : 2.6,
+        cx: x, cy: y, r: (key ? 3.6 : 2.6) * k,
         class: n.kind === 'phc' ? 'node-phc' : 'node-dot',
       }));
     }
     const t = svgEl('text', {
-      x: x + 8, y: y + 3.4, class: 'node-label' + (key ? ' key' : ''),
+      x: x + 8 * k, y: y + 3.4 * k, class: 'node-label' + (key ? ' key' : ''),
+      style: `font-size:${(key ? 9.5 : 8.5) * k}px`,
     });
     t.textContent = n.name;
     gNodes.appendChild(t);
@@ -427,7 +601,7 @@ function renderMap() {
       const [hx, hy] = proj(d.handover_at[0], d.handover_at[1]);
       legs.push([hx, hy]);
       gRoutes.appendChild(svgEl('circle', {
-        cx: hx, cy: hy, r: 3.2, class: 'handover',
+        cx: hx, cy: hy, r: 3.2 * k, class: 'handover',
       }));
     }
     if (d.reroute) {
@@ -473,6 +647,8 @@ function renderMap() {
   });
 
   svg.append(gRoads, gNodes, gRoutes, gMarks);
+  applyCamera();
+  wireMapCamera();
 
   const down = st.drivers.filter((d) => d.status === 'unavailable').length;
   $('#map-foot').textContent =
@@ -620,6 +796,40 @@ function verificationBadge(ev) {
   feedEl().scrollTop = 0;
 }
 
+/* The handoff, shown as evidence rather than asserted. Each agent's prompt
+   contains the previous agents' conclusions verbatim; this renders exactly that
+   list, so "the agents communicated" is something a reader can check instead of
+   believe. Collapsed by default via <details> — native, no icon font needed. */
+function handoffBlock(ev) {
+  const got = ev.received || [];
+  const extras = (ev.extra_keys || []).length
+    ? `<div class="hx-extra">plus computed input: ${(ev.extra_keys || [])
+         .map((k) => `<code>${esc(k)}</code>`).join(', ')}</div>`
+    : '';
+  if (!got.length) {
+    return `<details class="handoff">
+      <summary>Input &middot; first in the chain &middot; ${ev.prompt_chars || 0} chars</summary>
+      <div class="hx-body">
+        <div class="hx-none">No prior agent output — this agent starts the chain and
+        works only from the incident telemetry and model output.</div>
+        ${extras}
+      </div></details>`;
+  }
+  const rows = got.map((p) => `
+    <div class="hx-row">
+      <div class="hx-from">${esc(p.label)}</div>
+      <div class="hx-text">${esc(p.text)}</div>
+    </div>`).join('');
+  return `<details class="handoff">
+    <summary>Input &middot; received ${got.length} prior
+      ${got.length === 1 ? 'decision' : 'decisions'} &middot; ${ev.prompt_chars || 0} chars</summary>
+    <div class="hx-body">
+      <div class="hx-lead">Passed into this agent's prompt verbatim:</div>
+      ${rows}
+      ${extras}
+    </div></details>`;
+}
+
 function agentStart(ev) {
   const c = App.chain; if (!c) return;
   const card = el('div', 'acard active');
@@ -632,6 +842,7 @@ function agentStart(ev) {
        </div>
        <span class="ac-time"></span>
      </div>
+     ${handoffBlock(ev)}
      <div class="acard-body"></div>`;
   c.spine.appendChild(card);
   c.cards[ev.agent] = card;
@@ -961,6 +1172,10 @@ $('#autonomous-btn').addEventListener('click', () => {
 });
 
 $('#reset-btn').addEventListener('click', () => post('/api/reset'));
+
+$('#map-in').addEventListener('click', () => zoomMap(1.5));
+$('#map-out').addEventListener('click', () => zoomMap(1 / 1.5));
+$('#map-reset').addEventListener('click', resetMapCamera);
 
 function renderControls() {
   const m = App.meta;
