@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -64,15 +66,40 @@ PROVIDER = os.environ.get("AUTOFLEET_PROVIDER", "anthropic").strip().lower()
 
 ANTHROPIC_MODEL = os.environ.get("AUTOFLEET_MODEL", "claude-opus-5")
 
-# Groq's model line-up changes; check console.groq.com/docs/models and override
-# with AUTOFLEET_MODEL if this id has moved on. A wrong id surfaces as a clear
-# error in the agent card rather than a crash.
-GROQ_MODEL = os.environ.get("AUTOFLEET_MODEL", "llama-3.3-70b-versatile")
+# Groq retires model ids without notice — llama-3.3-70b-versatile was the
+# default here and has since been removed from the free tier, which surfaces as
+# a 404 and silently drops every agent to the deterministic fallback. Confirm
+# what your account can actually reach before trusting a default:
+#     python -m autofleet.llm --models
+# gpt-oss-120b is the largest currently-listed chat model that supports the
+# strict tool calling the Resource agent needs. Override with AUTOFLEET_MODEL.
+GROQ_MODEL = os.environ.get("AUTOFLEET_MODEL", "openai/gpt-oss-120b")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+
+# urllib's default User-Agent is fingerprint-blocked by Cloudflare in front of
+# Groq (surfaces as Error 1010 / 403 before the request ever reaches the API),
+# so every request from this module must identify itself properly.
+_USER_AGENT = f"AutoFleetAI/{__import__('autofleet').__version__} (+python-urllib)"
 
 # Agent turns are 1-3 sentences. Every number is pre-computed by the models, so
 # there is no long-form reasoning to leave room for.
 MAX_TOKENS = 1400
+
+# Groq's free tier caps TOKENS PER MINUTE (8000), not requests (1000). A six-call
+# chain therefore lives or dies on tokens-per-call, and MAX_TOKENS=1400 is a
+# loaded gun: a chatty model will fill it and one incident exhausts the minute.
+# Measured need is ~110 output tokens for a 1-3 sentence turn, so this is a
+# generous ceiling that still fits ~5 chains per minute.
+GROQ_MAX_TOKENS = int(os.environ.get("AUTOFLEET_GROQ_MAX_TOKENS", "400"))
+
+# gpt-oss models emit hidden reasoning tokens that are billed as output and
+# counted against the same budget. At default effort they spend most of the
+# allowance thinking and return a SHORTER answer; at "low" they produce more
+# usable text for fewer tokens. Measured, same prompt:
+#   default effort -> 307 tokens total, 119 chars of answer, 541 of reasoning
+#   reasoning=low  -> 253 tokens total, 291 chars of answer, 130 of reasoning
+_REASONING_MODEL_HINTS = ("gpt-oss", "qwen3", "deepseek-r1")
 
 EFFORT = os.environ.get("AUTOFLEET_EFFORT", "low")
 
@@ -105,6 +132,14 @@ class LLM:
 
     @property
     def live(self) -> bool:
+        """A key is CONFIGURED. This is not proof the provider works.
+
+        A configured key can still fail on every call — wrong key, retired
+        model id, network block — and the chain then runs entirely on
+        deterministic fallbacks. Only probe() proves the path works, and only
+        an agent event's source == "live" proves a given turn used the model.
+        Never report the system as live on the strength of this flag alone.
+        """
         return False
 
     def _stream_live(
@@ -380,6 +415,19 @@ class GroqLLM(LLM):
 
     # -- transport ---------------------------------------------------------
 
+    def _body(self, **over) -> Dict:
+        """Base request body: model, a bounded token cap, and reasoning effort.
+
+        Centralised so every call site (probe, tool call, stream) gets the same
+        token discipline. Getting this wrong on one path is invisible until that
+        path is the one that 429s mid-demo.
+        """
+        payload: Dict = {"model": self.model, "max_tokens": GROQ_MAX_TOKENS}
+        if any(h in self.model.lower() for h in _REASONING_MODEL_HINTS):
+            payload["reasoning_effort"] = EFFORT
+        payload.update(over)
+        return payload
+
     def _post(self, payload: Dict, *, stream: bool):
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -392,10 +440,57 @@ class GroqLLM(LLM):
                 # default "Python-urllib/3.x" signature with Error 1010 (access
                 # denied) before the request ever reaches Groq — which looks
                 # exactly like an auth failure but isn't. Identify properly.
-                "User-Agent": f"AutoFleetAI/{__import__('autofleet').__version__} (+python-urllib)",
+                "User-Agent": _USER_AGENT,
             },
         )
-        return urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS)
+        try:
+            return urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS)
+        except urllib.error.HTTPError as exc:
+            # 429 is the expected failure on a free tier: the budget is
+            # tokens-per-minute, so a burst of agents in one chain can hit it
+            # even with plenty of requests left. Groq tells us how long to wait;
+            # honour it once if it fits inside a single call's timeout, rather
+            # than dropping the agent to a fallback the audience can see.
+            if exc.code != 429:
+                raise
+            wait = self._retry_after_seconds(exc)
+            if wait is None or wait > REQUEST_TIMEOUT_SECONDS:
+                raise
+            time.sleep(wait)
+            return urllib.request.urlopen(
+                urllib.request.Request(
+                    GROQ_URL, data=body, method="POST",
+                    headers=dict(req.headers),
+                ),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+
+    @staticmethod
+    def _retry_after_seconds(exc: urllib.error.HTTPError) -> Optional[float]:
+        """Seconds Groq asks us to wait, from Retry-After or the reset header."""
+        for header in ("retry-after", "x-ratelimit-reset-tokens",
+                       "x-ratelimit-reset-requests"):
+            raw = exc.headers.get(header) if exc.headers else None
+            if not raw:
+                continue
+            raw = str(raw).strip()
+            try:
+                return float(raw)          # plain seconds
+            except ValueError:
+                pass
+            # Groq also uses compact durations like "33.45s", "1m26.4s", "600ms"
+            match = re.fullmatch(
+                r"(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?|(\d+(?:\.\d+)?)ms",
+                raw,
+            )
+            if not match:
+                continue
+            minutes, seconds, millis = match.groups()
+            if millis is not None:
+                return float(millis) / 1000.0
+            if minutes or seconds:
+                return float(minutes or 0) * 60.0 + float(seconds or 0)
+        return None
 
     @staticmethod
     def _explain(exc: Exception) -> str:
@@ -447,10 +542,10 @@ class GroqLLM(LLM):
         if not self.live:
             return {"ok": False, "detail": self._error or "not configured"}
         try:
-            with self._post({
-                "model": self.model, "max_tokens": 16,
-                "messages": [{"role": "user", "content": "Reply with the word OK."}],
-            }, stream=False) as resp:
+            with self._post(self._body(
+                max_tokens=96,
+                messages=[{"role": "user", "content": "Reply with the word OK."}],
+            ), stream=False) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
             text = (data["choices"][0]["message"].get("content") or "").strip()
             return {"ok": True, "detail": f"replied {text[:40]!r}"}
@@ -473,13 +568,12 @@ class GroqLLM(LLM):
         # *string* that has to be parsed, unlike Anthropic's pre-parsed dict.
         if tool is not None:
             try:
-                with self._post({
-                    "model": self.model, "max_tokens": MAX_TOKENS,
-                    "messages": messages,
-                    "tools": [self._to_openai_tool(tool)],
-                    "tool_choice": {"type": "function",
-                                    "function": {"name": tool["name"]}},
-                }, stream=False) as resp:
+                with self._post(self._body(
+                    messages=messages,
+                    tools=[self._to_openai_tool(tool)],
+                    tool_choice={"type": "function",
+                                 "function": {"name": tool["name"]}},
+                ), stream=False) as resp:
                     data = json.loads(resp.read().decode("utf-8", "replace"))
 
                 calls = (data["choices"][0]["message"] or {}).get("tool_calls") or []
@@ -514,10 +608,9 @@ class GroqLLM(LLM):
         collected: List[str] = []
         model_used = self.model
         try:
-            with self._post({
-                "model": self.model, "max_tokens": MAX_TOKENS,
-                "messages": messages, "stream": True,
-            }, stream=True) as resp:
+            with self._post(self._body(
+                messages=messages, stream=True,
+            ), stream=True) as resp:
                 for raw in resp:
                     line = raw.decode("utf-8", "replace").strip()
                     if not line.startswith("data:"):
@@ -590,7 +683,56 @@ def make_llm() -> LLM:
     return cls()
 
 
+def list_groq_models() -> None:
+    """Print the models this Groq key can actually reach.
+
+    Groq removes ids from the free tier without warning, and a retired id looks
+    exactly like a working setup until you check an agent's source field. This
+    asks the account rather than trusting a hardcoded default.
+    """
+    import urllib.error
+    import urllib.request
+
+    key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not key:
+        print("  GROQ_API_KEY is not set — nothing to list.")
+        return
+    req = urllib.request.Request(
+        GROQ_MODELS_URL,
+        headers={"Authorization": f"Bearer {key}", "User-Agent": _USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            ids = sorted(m["id"] for m in json.load(r).get("data", []))
+    except urllib.error.HTTPError as e:
+        print(f"  HTTP {e.code} listing models: {e.read().decode('utf-8', 'replace')[:200]}")
+        return
+    except Exception as e:  # network, DNS, TLS
+        print(f"  {type(e).__name__} listing models: {e}")
+        return
+
+    skip = ("whisper", "tts", "guard", "embed", "orpheus")
+    chat = [i for i in ids if not any(k in i.lower() for k in skip)]
+    print(f"  {len(ids)} models on this account, {len(chat)} usable for chat:\n")
+    for i in chat:
+        mark = "  <-- configured" if i == GROQ_MODEL else ""
+        print(f"    {i}{mark}")
+    if GROQ_MODEL not in ids:
+        print(f"\n  !! AUTOFLEET_MODEL / default '{GROQ_MODEL}' is NOT in this list.")
+        print("     That is a 404 on every agent call, and the chain will run")
+        print("     entirely on deterministic fallbacks. Pick one from above.")
+
+
 if __name__ == "__main__":  # python -m autofleet.llm
+    if "--models" in sys.argv:
+        print()
+        print("AutoFleet AI — models reachable with this key")
+        print("=" * 58)
+        list_groq_models()
+        print("=" * 58)
+        print()
+        raise SystemExit(0)
+
     client = make_llm()
     s = client.status
     print()
@@ -598,17 +740,25 @@ if __name__ == "__main__":  # python -m autofleet.llm
     print("=" * 58)
     print(f"  provider  {s['provider']}")
     print(f"  model     {s['model']}")
-    print(f"  live      {s['live']}")
+    print(f"  key set   {s['live']}   (configured — NOT yet proven to work)")
     print(f"  note      {s['note']}")
     if client.live:
         print("  probing   ...", end=" ", flush=True)
         r = client.probe()
         print("OK" if r["ok"] else "FAILED")
         print(f"            {r['detail']}")
-        if not r["ok"]:
+        if r["ok"]:
             print()
-            print("  The chain still runs — every agent falls back to deterministic")
-            print("  text and the dashboard labels it 'simulated'.")
+            print("  VERIFIED — agents will use the model. This is the only")
+            print("  output that proves it; a key being set does not.")
+        else:
+            print()
+            print("  NOT VERIFIED. The chain still runs, but every agent falls")
+            print("  back to deterministic text — the demo will look fine while")
+            print("  using no AI at all. Each agent card is labelled 'simulated'.")
+            print()
+            print("  See what this account can actually reach:")
+            print("    python -m autofleet.llm --models")
     else:
         print()
         print("  Set a key to go live:")

@@ -436,6 +436,24 @@ REASSIGN_TOOL: Dict = {
 # A8 — Coordinator fact-check
 # --------------------------------------------------------------------------
 
+# Models write typographic punctuation, not ASCII. gpt-oss returns "D‑101" with a
+# NON-BREAKING HYPHEN (U+2011) and narrow no-break spaces (U+202F) inside numbers.
+# An ASCII-only [A-Za-z]-\d pattern silently fails to strip such an id, "101" is
+# then read as a claim, and the Coordinator is reported as having fabricated a
+# number on every single incident — the fact-checker discrediting itself. So
+# normalise the text before any pattern touches it.
+_DASHES = dict.fromkeys(
+    (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0xFE63, 0xFF0D), "-"
+)
+_THIN_SPACES = dict.fromkeys((0x00A0, 0x2007, 0x2009, 0x202F), " ")
+_PUNCT_NORMALISE = {**_DASHES, **_THIN_SPACES}
+
+
+def _normalise(text: str) -> str:
+    """Fold typographic dashes and no-break spaces down to ASCII."""
+    return text.translate(_PUNCT_NORMALISE)
+
+
 # Identifiers must be stripped before looking for numbers, or "D-102" parses as
 # the number -102 and every single incident fails its own fact check.
 _ID_RE = re.compile(r"\b[A-Za-z]{1,4}-\d+\b")
@@ -456,7 +474,7 @@ def _numbers_in(text: str) -> List[float]:
 
 def _numbers_with_units(text: str) -> List[tuple]:
     """(value, is_percent) pairs, with identifiers removed first."""
-    cleaned = _ID_RE.sub(" ", text)
+    cleaned = _ID_RE.sub(" ", _normalise(text))
     out = []
     for raw, pct in _NUM_RE.findall(cleaned):
         try:
