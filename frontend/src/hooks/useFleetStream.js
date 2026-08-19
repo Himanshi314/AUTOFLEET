@@ -137,14 +137,21 @@ export function useFleetStream() {
         ]);
         break;
 
-      case 'incident_start':
+      // NOTE ON EVENT NAMES: these must match autofleet/agents.py exactly.
+      // They did not — this hook listened for incident_start / routing_plan /
+      // resolution while the server emits chain_start / plan / resolved. Because
+      // the chain was never initialised, every agent_* handler below hit its
+      // `if (!prev) return prev` guard and the whole feed silently did nothing.
+      // If you add an event server-side, add the case here or it is dropped.
+      case 'chain_start':
         setActiveIncidentCount(c => c + 1);
         setActiveChain({
           incident_id: ev.incident_id,
           delivery_id: ev.delivery_id,
-          disruption_key: ev.disruption_key,
+          disruption_key: ev.disruption,        // server sends `disruption`
           disruption_label: ev.disruption_label,
           disruption_icon: ev.disruption_icon,
+          severity: ev.severity,
           detected_as: ev.detected_as,
           risk_before: ev.risk_before,
           trigger: ev.trigger,
@@ -152,15 +159,21 @@ export function useFleetStream() {
           status: 'running',
           plan: null,
           agents: {},
+          skipped: [],
+          tools: [],
+          toolCall: null,
+          verification: null,
+          selection: null,
+          degraded: false,
           resolution: null,
         });
         setTerminalLogs(prev => [
           ...prev.slice(-99),
-          `[${timestamp}] [INCIDENT_START] ${ev.incident_id}: ${ev.disruption_label} on ${ev.delivery_id}`
+          `[${timestamp}] [CHAIN_START] ${ev.incident_id}: ${ev.disruption_label} on ${ev.delivery_id}`
         ]);
         break;
 
-      case 'routing_plan':
+      case 'plan':
         setActiveChain(prev => {
           if (!prev) return prev;
           return {
@@ -249,22 +262,86 @@ export function useFleetStream() {
         ]);
         break;
 
-      case 'resolution':
-        setActiveChain(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            status: 'resolved',
-            resolution: ev
-          };
-        });
-        if (ev.new_driver) {
-          setPickedDriver(ev.new_driver);
-        }
+      // A role the router chose not to wake. Carries the reason, so the UI can
+      // show that skipping was a decision rather than a gap.
+      case 'agent_skipped':
+        setActiveChain(prev => prev ? {
+          ...prev,
+          skipped: [...(prev.skipped || []), { id: ev.agent, label: ev.label, icon: ev.icon, owns: ev.owns, reason: ev.reason }]
+        } : prev);
+        break;
+
+      // Deterministic model output (route alternates, driver ranking). Not the
+      // language layer — these are the numbers the agents are handed.
+      case 'tool':
+        setActiveChain(prev => prev ? {
+          ...prev,
+          tools: [...(prev.tools || []), { name: ev.name, title: ev.title, detail: ev.detail, result: ev.result }]
+        } : prev);
+        break;
+
+      // The one binding action in the chain: the reassignment tool call.
+      case 'tool_call':
+        setActiveChain(prev => prev ? {
+          ...prev,
+          toolCall: { agent: ev.agent, name: ev.name, input: ev.input, validated: ev.validated }
+        } : prev);
         setTerminalLogs(prev => [
           ...prev.slice(-99),
-          `[${timestamp}] [RESOLUTION] ${ev.outcome.toUpperCase()}: ${ev.summary}`
+          `[${timestamp}] [TOOL_CALL] ${ev.name}(${ev.input?.driver_id || '-'}) validated=${ev.validated}`
         ]);
+        break;
+
+      // Which driver the suitability model picked, and why.
+      case 'selection':
+        setActiveChain(prev => prev ? { ...prev, selection: ev } : prev);
+        // InteractiveMap compares pickedDriver against drv.id, so this must be
+        // the driver ID. The old code passed resolution.new_driver, a NAME,
+        // which could never match and left the map highlight dead.
+        if (ev.driver_id) setPickedDriver(ev.driver_id);
+        break;
+
+      // Fact-checker verdict over the numbers the agents stated in prose.
+      case 'verification':
+        setActiveChain(prev => prev ? { ...prev, verification: ev } : prev);
+        setTerminalLogs(prev => [
+          ...prev.slice(-99),
+          `[${timestamp}] [VERIFY] ${ev.claims_checked} claims checked, ${ev.passed ? 'all traced to model output' : `${ev.unverified?.length || 0} UNVERIFIED`}`
+        ]);
+        break;
+
+      // Chain budget spent: the resolution still completes, but from
+      // deterministic output rather than the language layer.
+      case 'degraded':
+        setActiveChain(prev => prev ? { ...prev, degraded: true } : prev);
+        break;
+
+      case 'resolved':
+        setActiveChain(prev => prev ? { ...prev, status: 'resolved', resolution: ev } : prev);
+        setActiveIncidentCount(c => Math.max(0, c - 1));
+        setTerminalLogs(prev => [
+          ...prev.slice(-99),
+          // The server sends no `outcome` field — reading ev.outcome.toUpperCase()
+          // here used to throw and kill the handler.
+          `[${timestamp}] [RESOLVED] ${ev.reassigned ? 'REASSIGNED' : 'RETAINED'} in ${ev.seconds}s: ${ev.summary}`
+        ]);
+        break;
+
+      // No eligible driver: the system stops and hands the incident to a human
+      // rather than inventing a resolution.
+      case 'escalated':
+        setActiveChain(prev => prev ? { ...prev, status: 'escalated', escalation: ev } : prev);
+        setActiveIncidentCount(c => Math.max(0, c - 1));
+        setTerminalLogs(prev => [
+          ...prev.slice(-99),
+          `[${timestamp}] [ESCALATED] ${ev.incident_id}: ${ev.reason || 'handed to a human coordinator'}`
+        ]);
+        break;
+
+      // World changed under a running chain (mode switch or reset).
+      case 'aborted':
+        setActiveChain(null);
+        setActiveIncidentCount(0);
         break;
 
       default:
@@ -350,6 +427,7 @@ export function useFleetStream() {
     switchMode,
     setAutonomous,
     resetFleet,
-    activeIncidentCount
+    activeIncidentCount,
+    impactSeries
   };
 }

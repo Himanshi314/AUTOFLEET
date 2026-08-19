@@ -477,6 +477,21 @@ def main() -> None:
     ENGINE = Engine()
     status = ENGINE.llm.status
 
+    # `live` only means a key string was present and a client object was built —
+    # it proves nothing about whether the credential is accepted. Reporting LIVE
+    # on that basis is how a whole demo can run on deterministic fallback while
+    # the banner insists the agents are real. So spend one 16-token call up front
+    # and report what the provider actually said.
+    probe = ENGINE.llm.probe() if status["live"] else {"ok": False, "detail": "no live provider configured"}
+    verified = bool(probe.get("ok"))
+
+    if status["live"] and not verified:
+        agents_line = f"FALLBACK · key rejected by {status['provider']}"
+    elif verified:
+        agents_line = f"LIVE · {status['model']} · verified"
+    else:
+        agents_line = "SIMULATED · deterministic fallback"
+
     httpd = QuietServer((args.host, args.port), Handler)
 
     lines = [
@@ -485,11 +500,21 @@ def main() -> None:
         "  AutoFleet AI — autonomous last-mile disruption resolution",
         "=" * 68,
         f"  Dashboard   http://{args.host}:{args.port}",
-        f"  Agents      {'LIVE · ' + status['model'] if status['live'] else 'SIMULATED'}",
-        f"  {status['note']}",
+        f"  Agents      {agents_line}",
     ]
-    if not status["live"]:
-        lines.append("  Set ANTHROPIC_API_KEY (or copy .env.example to .env) for live agents.")
+    # status['note'] is written on construction and still reads "Live agents on
+    # <model>" — printing it under a rejected key contradicts the line above.
+    if not (status["live"] and not verified):
+        lines.append(f"  {status['note']}")
+    if status["live"] and not verified:
+        lines += [
+            "",
+            f"  !! The provider rejected the credential: {probe['detail']}",
+            "  !! Every agent will silently produce deterministic output instead.",
+            "  !! The reasoning you see will NOT be from a language model.",
+        ]
+    elif not status["live"]:
+        lines.append("  Set GROQ_API_KEY or ANTHROPIC_API_KEY in .env for live agents.")
     lines += ["=" * 68, ""]
     # flush explicitly: stdout is block-buffered when redirected to a file.
     print("\n".join(lines), flush=True)

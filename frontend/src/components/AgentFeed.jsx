@@ -55,7 +55,7 @@ export function AgentFeed({ activeChain }) {
           No active disruption
         </h4>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 360, lineHeight: 1.5 }}>
-          Five specialist agents are on standby. Trigger a disruption on any active delivery or arm <b>Autonomous</b> watchdog to self-trigger.
+          Six specialist agents are on standby, and the router decides which of them this incident actually needs. Trigger a disruption on any active delivery or arm <b>Autonomous</b> watchdog to self-trigger.
         </p>
       </div>
     );
