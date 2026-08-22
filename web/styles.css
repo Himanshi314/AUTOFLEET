@@ -88,7 +88,18 @@ body {
   overflow: hidden;
 }
 
-.app { height: 100%; display: grid; grid-template-rows: auto auto minmax(0,1fr) auto; }
+/* Column flex, deliberately NOT positional grid rows. This was
+   `grid-template-rows: auto auto minmax(0,1fr) auto` — four rows for what was
+   then four children. Adding the decisions and intents sections shifted every
+   child down a row, so the flexible 1fr landed on a panel that should have been
+   fixed and the live view collapsed to 22px underneath it. With flex, which
+   child stretches is stated on the child, so inserting a section can never
+   silently re-assign it again. */
+.app { height: 100%; display: flex; flex-direction: column; }
+
+/* flex-shrink defaults to 1, so these must opt out explicitly or they get
+   squeezed to nothing when the content below is tall. */
+.topbar, .impact-strip, .decisions, .intents, .courier, .logbar { flex: 0 0 auto; }
 .mono { font-family: var(--font-mono); }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -899,6 +910,8 @@ body {
 
 .courier { display: none; }
 .app.view-courier .grid,
+.app.view-courier .intents,
+.app.view-courier .decisions,
 .app.view-courier .impact-strip { display: none; }
 .app.view-courier .courier {
   display: block; overflow-y: auto; min-height: 0;
@@ -1366,3 +1379,26 @@ body {
   background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
   margin-left: 5px;
 }
+
+
+/* ---- Intent register: compact by default ------------------------------- */
+/* Seven cards pinned open pushed the deliveries / map / feed row down to about
+   a hundred pixels. This is reference material, so it collapses to one line and
+   gives the vertical space back to the live view. */
+.intents { padding: 11px 16px; }
+.intents-right { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+.intents-expand { font-size: 10.5px; padding: 4px 10px; }
+.intents-summary {
+  font-size: 10px; color: var(--ink-3); margin-top: 2px;
+}
+.intent-list.collapsed { display: none; }
+.intents-head { margin-bottom: 0; }
+.intent-list { margin-top: 10px; }
+.intents-head p { display: none; }
+.intents:has(.intent-list:not(.collapsed)) .intents-head p { display: block; }
+
+/* The live row must never be crushed by whatever sits above it. */
+.grid { flex: 1 1 auto; min-height: 300px; }
+
+/* The impact strip was 150px of chrome; trim it without losing legibility. */
+.impact-strip { padding: 8px 18px; gap: 9px; }

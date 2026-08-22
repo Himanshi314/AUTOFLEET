@@ -72,11 +72,16 @@
            commits — switch one off and run the same incident to see the
            decision change.</p>
       </div>
-      <div class="intents-clock">
-        <span class="ic-label">fleet clock</span>
-        <span class="ic-time mono" id="intents-clock">--:--</span>
+      <div class="intents-right">
+        <div class="intents-clock">
+          <span class="ic-label">fleet clock</span>
+          <span class="ic-time mono" id="intents-clock">--:--</span>
+        </div>
+        <button class="ctl intents-expand" id="intents-expand"
+                aria-expanded="false" aria-controls="intent-list">Show all</button>
       </div>
     </div>
+    <p class="intents-summary mono" id="intents-summary"></p>
     <div class="intent-list" id="intent-list"></div>
   </section>
 

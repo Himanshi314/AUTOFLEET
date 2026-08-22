@@ -260,6 +260,7 @@ function refreshDecisions() {
 
 function renderIntents(payload) {
   if (!payload) return;
+  App.intentsPayload = payload;
   App.intents = payload.intents || [];
   const host = document.getElementById('intent-list');
   const clock = document.getElementById('intents-clock');
@@ -268,6 +269,21 @@ function renderIntents(payload) {
   if (clock && payload.clock) clock.textContent = payload.clock;
   const live = App.intents.filter(i => i.active).length;
   if (count) count.textContent = `${live} of ${App.intents.length} binding`;
+
+  const open = App.intentsOpen === true;
+  host.classList.toggle('collapsed', !open);
+  const summary = document.getElementById('intents-summary');
+  if (summary) {
+    const by = {};
+    App.intents.forEach(i => { by[i.holder_type] = (by[i.holder_type] || 0) + 1; });
+    const parts = Object.keys(by).sort().map(k => `${by[k]} ${k}`);
+    summary.textContent = parts.join(' \u00b7 ');
+  }
+  const btn = document.getElementById('intents-expand');
+  if (btn) {
+    btn.textContent = open ? 'Hide' : 'Show all';
+    btn.setAttribute('aria-expanded', String(open));
+  }
 
   host.innerHTML = '';
   App.intents.forEach(i => {
@@ -404,7 +420,7 @@ function renderFleet() {
            <div class="dc-pay">${esc(d.payload)}</div>
          </div>
          <span class="chip ${CHIP[d.status] || 'chip-onroute'}">${esc(d.status)}</span>
-         \${d.difficult ? '<span class="chip chip-difficult" title="Low geocode confidence, recipient often out, or a congested corridor - this one is likely to conflict">tricky</span>' : ''}
+         ${d.difficult ? '<span class="chip chip-difficult" title="Low geocode confidence, a recipient often out, or a corridor already bad — this one is likely to conflict">tricky</span>' : ''}
        </div>
        <div class="dc-rows">
          <div class="dc-row"><span class="k">Carrier</span><span class="v">${
@@ -1794,4 +1810,12 @@ document.getElementById('decisions').addEventListener('click', (e) => {
     .catch(() => {
       [...document.querySelectorAll('.dc-opt')].forEach(b => { b.disabled = false; });
     });
+});
+
+/* The register is reference material, so it stays out of the way until asked
+   for. Collapsed it is one line; the deliveries, map and agent feed get the
+   vertical space instead. */
+document.getElementById('intents-expand').addEventListener('click', () => {
+  App.intentsOpen = !App.intentsOpen;
+  renderIntents(App.intentsPayload || { intents: App.intents || [] });
 });
