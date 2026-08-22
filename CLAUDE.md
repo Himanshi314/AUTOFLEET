@@ -554,3 +554,24 @@ Whoever owns a track must be able to explain **every line** in it. A judge askin
 
 Integrate on day 6, not day 9. Freeze code on day 9 and rehearse. Record a backup
 video of a perfect run — if the network dies on stage, play it and keep talking.
+
+## Tests
+
+    python run_tests.py            # all 116
+    python run_tests.py world      # one suite: routing | intent | world | agents | server
+
+No network and no API calls — every suite forces the deterministic model, so a
+run costs nothing and works offline. Run it before a demo.
+
+| suite   | what it guards |
+|---------|----------------|
+| routing | the severity router's decision table |
+| intent  | conflict evaluators, the pre-commit gate, decisions, register lifecycle |
+| world   | delivery lifecycle, ETA from geometry, the clock, drift, escalation slots |
+| agents  | fact-checker (incl. typographic dashes), prompt budget, routing-efficiency ledger |
+| server  | HTTP layer, plus a regression for every defect found by attacking it |
+
+Most of these assert something that was once live and wrong *while looking
+right* — a risk score that ratcheted to critical on idle time, a hardcoded
+"0 human interventions", an ETA parked at 1 min for ever. A green run does not
+prove the dashboard looks correct; it proves the quiet failures stay fixed.
