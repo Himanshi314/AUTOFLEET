@@ -1148,9 +1148,17 @@ class World:
             _HUMANITARIAN_JOBS if self.is_humanitarian else _COMMERCIAL_JOBS
         )
         difficult = self.rng.random() < DIFFICULT_JOB_SHARE
-        origin = self.hub
-        # A new job starts at the depot, so the courier is dispatched from there.
-        drv["at"] = coord(origin)
+        # Dispatch from where the courier actually is, not from the depot.
+        # Teleporting them to the hub was visible on the map: a rider finished in
+        # Whitefield and reappeared at Yeshwanthpur in the same tick, roughly
+        # 15 km instantly. Real dynamic dispatch sends the next job to the
+        # courier's current position, so the origin is their nearest node and
+        # they simply carry on from there.
+        #
+        # Safe for the ledger: avoided-redelivery km is measured hub-to-customer
+        # from self.hub directly, never from a delivery's origin, so moving the
+        # origin changes the geometry on screen and nothing that is counted.
+        origin = nearest_nodes(drv["at"], self.nodes, limit=1)[0][0]
         drv["located_at"] = origin
         drv["status"] = "on_route"
         drv["assigned_delivery"] = did

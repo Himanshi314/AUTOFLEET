@@ -34,6 +34,8 @@ const App = {
   chain: null,           // { root, spine, fill, cards:{}, order:[] }
   tiles: {},             // rendered impact values, for count-up
   pickedDriver: null,    // highlights the chosen driver on the map
+  focusDriver: null,     // courier the operator is looking at
+  mapExpanded: false,    // map taking over the whole grid
   view: 'ops',           // 'ops' (company) | 'courier' (the rider)
   courierId: null,
   logCount: 0,
@@ -876,6 +878,55 @@ function projector(bounds, w, h, pad) {
   ];
 }
 
+
+/* ---- Focusing a courier ------------------------------------------------ */
+/* The map and the delivery list were two separate things to scroll. Now they
+   point at each other: click a courier on the map and their card is brought
+   into view, click a card and the camera goes to their courier. */
+function focusDriver(driverId, { zoom = true } = {}) {
+  const st = App.state;
+  if (!st) return;
+  const drv = st.drivers.find((d) => d.id === driverId);
+  if (!drv) return;
+  App.focusDriver = driverId;
+
+  if (zoom) {
+    // Same projection the map itself uses, so the courier lands dead centre.
+    // The camera is a centre point; clampCamera() inside applyCamera() keeps it
+    // from panning off the edge, so nothing needs clamping here.
+    const svg = document.getElementById('map');
+    const pad = svg && svg.clientWidth < 520 ? 34 : 56;
+    const [mx, my] = projector(st.map.bounds, MAP_W, MAP_H, pad)(drv.at[0], drv.at[1]);
+    App.mapView.z = Math.max(App.mapView.z, 2.6);
+    App.mapView.cx = mx;
+    App.mapView.cy = my;
+  }
+  renderMap();
+
+  const job = st.deliveries.find((d) => d.driver_id === driverId);
+  const card = job && document.querySelector(`.dcard[data-id="${job.id}"]`);
+  document.querySelectorAll('.dcard.focused').forEach((c) => c.classList.remove('focused'));
+  if (card) {
+    card.classList.add('focused');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  const label = document.getElementById('map-focus');
+  if (label) {
+    label.textContent = job
+      ? `${drv.name} · ${job.id} → ${job.destination_name}`
+      : `${drv.name} · no active job`;
+    label.hidden = false;
+  }
+}
+
+function clearFocus() {
+  App.focusDriver = null;
+  document.querySelectorAll('.dcard.focused').forEach((c) => c.classList.remove('focused'));
+  const label = document.getElementById('map-focus');
+  if (label) label.hidden = true;
+  renderMap();
+}
+
 function renderMap() {
   const svg = $('#map');
   const st = App.state;
@@ -977,7 +1028,13 @@ function renderMap() {
     const kind = drv.status === 'unavailable' ? 'down'
       : App.pickedDriver === drv.id ? 'picked'
       : carrying.has(drv.id) ? 'assigned' : 'standby';
-    const g = svgEl('g', { class: 'mk mk-' + kind });
+    const g = svgEl('g', {
+      class: 'mk mk-' + kind + (App.focusDriver === drv.id ? ' mk-focus' : ''),
+      'data-driver': drv.id,
+    });
+    // A generous transparent hit area. The visible dot is 4.6px inside a panel
+    // that can be 200px tall, which is far too small to click reliably.
+    g.appendChild(svgEl('circle', { cx: x, cy: y, r: 13, class: 'mk-hit' }));
     if (kind !== 'standby') g.appendChild(svgEl('circle', { cx: x, cy: y, r: 7, class: 'mk-halo' }));
     g.appendChild(svgEl('circle', { cx: x, cy: y, r: kind === 'standby' ? 3.4 : 4.6, class: 'mk-body' }));
     if (kind !== 'standby') {
@@ -993,10 +1050,14 @@ function renderMap() {
   wireMapCamera();
 
   const down = st.drivers.filter((d) => d.status === 'unavailable').length;
-  $('#map-foot').textContent =
+  const footText =
     `${map.nodes.length} nodes · ${map.roads.length} corridors · ` +
     `${st.drivers.length} drivers (${carrying.size} carrying, ${down} unavailable) · ` +
     `positions from real coordinates, distances via haversine × circuity`;
+  const foot = $('#map-foot');
+  foot.textContent = footText;
+  // Truncated to one line in the collapsed panel, so keep it readable on hover.
+  foot.title = footText;
 }
 
 /* ================================================================= FEED === */
@@ -1818,4 +1879,45 @@ document.getElementById('decisions').addEventListener('click', (e) => {
 document.getElementById('intents-expand').addEventListener('click', () => {
   App.intentsOpen = !App.intentsOpen;
   renderIntents(App.intentsPayload || { intents: App.intents || [] });
+});
+
+/* Click a courier on the map to look at them; click the same one again, or the
+   backdrop, to let go. */
+document.getElementById('map').addEventListener('click', (e) => {
+  const g = e.target.closest('[data-driver]');
+  if (!g) return;
+  const id = g.getAttribute('data-driver');
+  if (App.focusDriver === id) clearFocus(); else focusDriver(id);
+});
+
+/* And the other direction: a delivery card points at its courier. */
+document.getElementById('fleet-list').addEventListener('click', (e) => {
+  if (e.target.closest('.trig')) return;            // trigger buttons win
+  const card = e.target.closest('.dcard[data-id]');
+  if (!card) return;
+  const job = (App.state?.deliveries || [])
+    .find((d) => d.id === card.dataset.id);
+  if (job?.driver_id) focusDriver(job.driver_id);
+});
+
+/* Give the map the whole grid. A 200px-tall panel is not something you can
+   read a city on, however well it zooms. */
+function setMapExpanded(on) {
+  App.mapExpanded = on;
+  document.querySelector('.app').classList.toggle('map-expanded', on);
+  const btn = document.getElementById('map-expand');
+  if (btn) {
+    btn.textContent = on ? 'Collapse' : 'Expand';
+    btn.setAttribute('aria-pressed', String(on));
+  }
+  renderMap();
+}
+
+document.getElementById('map-expand').addEventListener('click',
+  () => setMapExpanded(!App.mapExpanded));
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (App.mapExpanded) setMapExpanded(false);
+  else if (App.focusDriver) clearFocus();
 });

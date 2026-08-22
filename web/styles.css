@@ -1409,3 +1409,56 @@ body {
 
 /* The impact strip was 150px of chrome; trim it without losing legibility. */
 .impact-strip { padding: 8px 18px; gap: 9px; }
+
+
+/* ---- Map: clickable couriers ------------------------------------------- */
+/* The visible dot is under 5px in a panel that can be 200px tall, so the hit
+   area is a transparent circle roughly three times that. */
+.mk { cursor: pointer; }
+.mk-hit { fill: transparent; stroke: none; }
+.mk:hover .mk-body { stroke: var(--primary); stroke-width: 2; }
+.mk-focus .mk-body { stroke: var(--primary); stroke-width: 2.5; }
+.mk-focus .mk-halo { fill: rgba(30, 58, 43, .16); }
+.mk-focus .mk-name { font-weight: 800; fill: var(--primary); }
+
+.map-focus {
+  font-size: 10.5px; color: var(--primary); font-weight: 700;
+  background: #eef6f1; border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 9px; margin-left: 10px;
+}
+
+/* The delivery card belonging to the courier being looked at. */
+.dcard.focused {
+  border-color: var(--accent-dark);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, .22);
+}
+
+/* ---- Map: expanded ----------------------------------------------------- */
+/* A city map in a 200px strip is decoration. Expanded, the map takes the whole
+   live row and the other columns step aside. */
+.app.map-expanded .col-fleet,
+.app.map-expanded .col-feed,
+.app.map-expanded .panel-risk { display: none; }
+.app.map-expanded .grid { grid-template-columns: 1fr; }
+.app.map-expanded .col-centre { min-width: 0; }
+/* No height overrides here on purpose. .panel-map is already `flex: 1 1 auto`
+   inside a flex column, and .map-wrap and #map are already `flex: 1`, so hiding
+   .panel-risk is enough for the map to take the whole row. Forcing height:100%
+   down that chain fights the flex model and overflows the page instead — the
+   same mistake as pinning .courier to its content height. */
+#map-expand { min-width: 62px; }
+
+
+/* ---- Map chrome: stop the footnote eating the map --------------------- */
+/* The provenance caption wrapped to three lines in a narrow column - 68px of a
+   165px panel, leaving 52px for the city. It is a footnote, so it gets one line
+   and the full text stays in the tooltip. */
+.map-foot {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+/* Title and legend on one row rather than stacked. */
+.panel-map .panel-head { flex-wrap: nowrap; align-items: center; row-gap: 0; }
+.panel-map .legend { flex-wrap: nowrap; overflow: hidden; }
+/* Expanded, there is room for the whole caption again. */
+.app.map-expanded .map-foot { white-space: normal; }

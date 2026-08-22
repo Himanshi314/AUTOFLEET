@@ -102,6 +102,7 @@
       <div class="panel panel-map">
         <div class="panel-head">
           <h2>Fleet map</h2>
+          <span class="map-focus mono" id="map-focus" hidden></span>
           <div class="legend">
             <span><i class="lg lg-assigned"></i>carrying</span>
             <span><i class="lg lg-standby"></i>standby</span>
@@ -116,6 +117,8 @@
             <span class="mono" id="map-zoom-label">1.0&times;</span>
             <button id="map-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
             <button id="map-reset" title="Back to the whole city" aria-label="Reset zoom" disabled>Fit</button>
+            <button id="map-expand" title="Give the map the whole panel (Esc to collapse)"
+                    aria-pressed="false">Expand</button>
           </div>
           <div class="map-foot" id="map-foot"></div>
         </div>
