@@ -13,7 +13,8 @@ import random
 import threading
 from typing import Dict, List, Optional
 
-from .geo import NODES, ROADS, bounds, coord, road_km, travel_minutes
+from .geo import (NODES, ROADS, bounds, coord, nearest_nodes, road_km,
+                  travel_minutes)
 from .impact import ImpactLedger, avoided_redelivery_km
 from .scoring import RISK_MODEL
 
@@ -403,6 +404,7 @@ class World:
             d["incidents"] = []
             d["reroute"] = None
             d["handover_at"] = None
+            d["handover"] = None
             # An en-route driver sits partway along their corridor, not on top of
             # the destination node — otherwise remaining distance reads as zero.
             if drv["status"] == "on_route":
@@ -542,6 +544,8 @@ class World:
                         "incidents": d["incidents"],
                         "reroute": d["reroute"],
                         "handover_at": d.get("handover_at"),
+                        # Briefing for the courier who received this job.
+                        "handover": d.get("handover"),
                     }
                 )
             deliveries.sort(key=lambda x: x["id"])
@@ -662,10 +666,27 @@ class World:
                 else (self.drivers[d["driver_id"]]["at"] if d["driver_id"] in self.drivers
                       else coord(d["origin"]))
             )
+            # "current payload location" is useless to the courier who has to ride
+            # there. The payload sits wherever the stranded rider stopped, which is
+            # rarely a node centroid, so name the nearest known locality and say
+            # how far off it is — something a person can actually navigate to.
+            if disruption["needs_replacement_stock"]:
+                pickup_label = "the depot (replacement stock)"
+            else:
+                near = nearest_nodes(pickup, self.nodes, limit=1)
+                if near:
+                    node_id, km = near[0]
+                    place = NODES[node_id]["name"]
+                    pickup_label = (
+                        place if km < 0.4
+                        else f"{place} (payload is {km:.1f} km off the node)"
+                    )
+                else:
+                    pickup_label = "the payload's current location"
+
             return {
                 "pickup": pickup,
-                "pickup_label": "depot (replacement stock)"
-                if disruption["needs_replacement_stock"] else "current payload location",
+                "pickup_label": pickup_label,
                 "dropoff": coord(d["destination"]),
                 "traffic_index": d["telemetry"]["traffic_index"],
                 "cold_chain": bool(d.get("cold_chain")),
@@ -706,6 +727,8 @@ class World:
         new_eta: float,
         support: Optional[str],
         handover_at: Optional[tuple] = None,
+        handover_label: Optional[str] = None,
+        rationale: Optional[str] = None,
         llm_calls_used: int = 0,
         llm_calls_saved: int = 0,
     ) -> Dict:
@@ -715,6 +738,7 @@ class World:
             d = self.deliveries[delivery_id]
             previous_driver_id = d["driver_id"]
             previous_driver = self.drivers.get(previous_driver_id)
+            previous_eta = d["eta_minutes"]
             reassigned = bool(chosen and chosen["driver_id"] != previous_driver_id)
 
             if reassigned:
@@ -739,7 +763,35 @@ class World:
                 # it, so the journey is two legs. Record the collection point so
                 # the map shows the same path the ETA was computed from.
                 d["handover_at"] = list(handover_at) if handover_at else None
+                # A briefing for the courier who RECEIVES the job. Without this
+                # the replacement rider's screen simply changes underneath them:
+                # a new drop, a new ETA, and no statement of where the payload
+                # is, who has it, why it moved, or why they were picked. Every
+                # field here is already computed by the chain — it just was not
+                # being handed to the one person who has to act on it.
+                eta_before = previous_eta
+                d["handover"] = {
+                    "incident_id": incident_id,
+                    "from_driver_id": previous_driver_id,
+                    "from_driver_name": (previous_driver or {}).get("name"),
+                    "reason": disruption["label"],
+                    "reason_icon": disruption["icon"],
+                    "collect_at": handover_label,
+                    "collect_at_coords": list(handover_at) if handover_at else None,
+                    "support_for_them": support,
+                    # Why THIS rider: the ranker's decisive feature plus the
+                    # Resource agent's own sentence, so the rationale shown to
+                    # the courier is the same one shown to operations.
+                    "why_you": (chosen or {}).get("decisive_factor"),
+                    "suitability": (chosen or {}).get("suitability"),
+                    "approach_km": (chosen or {}).get("distance_km"),
+                    "rationale": rationale,
+                    "eta_before": eta_before,
+                    "eta_after": round(new_eta, 1),
+                }
             else:
+                # No transfer happened, so no briefing should be showing.
+                d["handover"] = None
                 if disruption["disables_driver"] and previous_driver:
                     previous_driver["status"] = "unavailable"
                     previous_driver["unavailable_reason"] = disruption["label"]

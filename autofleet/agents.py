@@ -948,6 +948,10 @@ def run_chain(
         disruption_key=disruption_key, chosen=chosen, reroute=chosen_route,
         new_eta=new_eta, support=dis["driver_support"],
         handover_at=requirement["pickup"] if will_reassign else None,
+        handover_label=requirement["pickup_label"] if will_reassign else None,
+        # The Resource agent's own sentence, so the courier is told the same
+        # reason operations is told — not a separate, blander paraphrase.
+        rationale=(tool_results.get("resource") or {}).get("rationale"),
         # len(runs), not calls_made: this ledger line is written before the
         # coordinator runs, so calls_made would undercount the chain by one.
         # The pair is the router's efficiency claim and must sum to ALL_AGENTS.

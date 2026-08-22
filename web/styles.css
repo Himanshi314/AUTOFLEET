@@ -1071,3 +1071,57 @@ body {
   margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border);
   font-size: 10.5px; line-height: 1.55; color: var(--ink-3);
 }
+
+
+/* ---- Courier: handover briefing ---------------------------------------- */
+/* The rider receiving a transferred job gets the chain's actual reasoning:
+   where the payload is, who has it, why it moved, and why they were chosen. */
+.cr-handover {
+  margin-top: 12px; padding: 13px 15px;
+  background: linear-gradient(180deg, #f0fdf6 0%, var(--bg-card) 60%);
+  border: 1px solid var(--accent); border-left: 3px solid var(--accent-dark);
+  border-radius: 10px;
+}
+.hb-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.hb-badge {
+  font: 800 10px/1 var(--font-ui); text-transform: uppercase;
+  letter-spacing: .06em; color: #fff; background: var(--accent-dark);
+  padding: 5px 9px; border-radius: 999px;
+}
+.hb-inc {
+  font: 600 11px/1 var(--font-mono); color: var(--ink-3);
+}
+.hb-rows { display: flex; flex-direction: column; gap: 9px; }
+.hb-row { display: flex; gap: 9px; align-items: flex-start; }
+.hb-row i { font-style: normal; font-size: 14px; line-height: 1.35; flex: 0 0 auto; }
+.hb-row div { font-size: 12px; line-height: 1.55; color: var(--ink-2); }
+.hb-row b { color: var(--primary); font-weight: 700; }
+.hb-quote {
+  margin-top: 11px; padding: 9px 11px;
+  background: var(--bg-subtle); border-radius: 8px;
+  font-size: 11.5px; line-height: 1.6; color: var(--ink-2); font-style: italic;
+}
+.hb-attr {
+  display: block; margin-top: 4px; font-style: normal;
+  font: 600 9.5px/1 var(--font-mono); text-transform: uppercase;
+  letter-spacing: .04em; color: var(--ink-3);
+}
+
+/* The push notification the rider would actually receive. */
+.cr-toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  z-index: 60; display: flex; flex-direction: column; gap: 2px;
+  padding: 11px 18px; border-radius: 11px;
+  background: var(--primary); color: #fff;
+  box-shadow: 0 10px 30px rgba(16,40,28,.3);
+  animation: toastIn .26s cubic-bezier(.2,.9,.3,1);
+  max-width: min(420px, 90vw);
+}
+.cr-toast b { font: 700 12.5px/1.35 var(--font-ui); }
+.cr-toast span { font-size: 11px; opacity: .85; line-height: 1.4; }
+.cr-toast.out { animation: toastOut .5s forwards; }
+@keyframes toastIn  { from { opacity: 0; transform: translate(-50%, 14px); } }
+@keyframes toastOut { to   { opacity: 0; transform: translate(-50%, 10px); } }

@@ -37,6 +37,9 @@ const App = {
   view: 'ops',           // 'ops' (company) | 'courier' (the rider)
   courierId: null,
   logCount: 0,
+  // incident_id last announced to each courier, so a handover alerts once
+  // rather than on every state tick.
+  seenHandover: {},
   // Map camera. Lives OUTSIDE renderMap because renderMap() wipes and rebuilds
   // the SVG on every state tick — holding zoom in the DOM would reset it to
   // fully-zoomed-out roughly once a second while you were trying to look.
@@ -354,6 +357,75 @@ function renderRisk() {
 
 const SHIFT_FULL_MIN = 240;
 
+/* What the courier who RECEIVES a transferred job is told.
+   Previously this was one sentence — "you picked this up after another courier
+   could not continue, collect at the handover point marked on your route" —
+   which named no place, gave no reason, and pointed at a route marker that does
+   not exist in this view. The rider being handed the work is the person who most
+   needs the chain's reasoning, so every field below comes from the resolution
+   itself: where the payload physically is, who has it and what happened to them,
+   why this rider was selected, and what it does to their own ETA. */
+function handoverBriefing(job, drv) {
+  const h = job.handover;
+  if (!h || !job.reassigned || job.driver_id !== drv.id) return '';
+
+  const shift = h.eta_after != null && h.eta_before != null
+    ? h.eta_after - h.eta_before : null;
+  const shiftLine = shift == null ? '' : `
+    <div class="hb-row">
+      <i>⏱️</i>
+      <div><b>Your ETA for this job is ${nf(h.eta_after, 0)} min.</b>
+        ${Math.abs(shift) < 1
+          ? `That is effectively unchanged from the original plan.`
+          : `That is ${nf(Math.abs(shift), 0)} min ${shift > 0 ? 'later' : 'earlier'} than
+             the original courier's ${nf(h.eta_before, 0)} min — the recipient has
+             already been told.`}</div>
+    </div>`;
+
+  const whyLine = h.why_you ? `
+    <div class="hb-row">
+      <i>🎯</i>
+      <div><b>Why you:</b> ${esc(h.why_you)}${h.suitability != null
+        ? ` &middot; suitability ${nf(h.suitability, 2)}` : ''}${h.approach_km != null
+        ? ` &middot; you were ${nf(h.approach_km, 1)} km from the collection point` : ''}.
+        Every eligible courier was scored; you ranked first.</div>
+    </div>` : '';
+
+  // The Resource agent's own sentence — the same rationale operations sees.
+  const rationaleLine = h.rationale ? `
+    <div class="hb-quote">“${esc(h.rationale)}”
+      <span class="hb-attr">— Resource Agent, ${esc(h.incident_id || '')}</span></div>` : '';
+
+  return `
+    <div class="cr-handover">
+      <div class="hb-head">
+        <span class="hb-badge">New job assigned to you</span>
+        <span class="hb-inc">${esc(h.reason_icon || '')} ${esc(h.reason || '')}</span>
+      </div>
+      <div class="hb-rows">
+        <div class="hb-row">
+          <i>📦</i>
+          <div><b>Collect the payload at ${esc(h.collect_at || 'the handover point')}.</b>
+            ${h.from_driver_name
+              ? `${esc(h.from_driver_name)} is waiting there with it.`
+              : ''}</div>
+        </div>
+        <div class="hb-row">
+          <i>${esc(h.reason_icon || '⚠️')}</i>
+          <div><b>Why it moved:</b> ${esc(h.from_driver_name || 'The previous courier')}
+            had a ${esc((h.reason || 'problem').toLowerCase())} and could not continue.
+            ${h.support_for_them
+              ? `${esc(h.support_for_them.charAt(0).toUpperCase() + h.support_for_them.slice(1))}
+                 has been dispatched to them.` : ''}
+            This is not a penalty on them or on you.</div>
+        </div>
+        ${whyLine}
+        ${shiftLine}
+      </div>
+      ${rationaleLine}
+    </div>`;
+}
+
 function renderCourier() {
   const host = $('#courier');
   const st = App.state;
@@ -410,9 +482,7 @@ function renderCourier() {
       ${job.cold_chain ? `<div class="cold ${job.cold_minutes_remaining < 75 ? 'tight' : ''}">
         <span class="cold-k">Cold-chain window</span>
         <span class="cold-v">${job.cold_minutes_remaining} min left</span></div>` : ''}
-      ${job.reassigned && job.driver_id === drv.id
-        ? `<div class="cr-note">You picked this up after another courier could not continue.
-             Collect the payload at the handover point marked on your route.</div>` : ''}
+      ${handoverBriefing(job, drv)}
     </div>`
     : `<div class="cr-job empty">
          <div class="cr-job-h"><span class="cr-job-id">No active job</span></div>
@@ -490,6 +560,30 @@ function renderCourier() {
       ${jobCard}
       ${reportPanel}
     </div>`;
+
+  // Being handed a job is a push notification in the real product, not something
+  // you discover by re-reading your own screen. Fire it once per incident, per
+  // courier, so a state tick every second does not re-alert forever.
+  const h = job && job.reassigned && job.driver_id === drv.id ? job.handover : null;
+  if (h && h.incident_id && App.seenHandover[drv.id] !== h.incident_id) {
+    App.seenHandover[drv.id] = h.incident_id;
+    courierToast(
+      `${h.reason_icon || '📦'} New job: ${job.id}`,
+      `Collect at ${h.collect_at || 'the handover point'} · ETA ${nf(job.eta_minutes, 0)} min`
+    );
+  }
+}
+
+function courierToast(title, body) {
+  // Append to body, NOT to #courier: renderCourier() replaces that element's
+  // innerHTML on every state tick, which destroyed the toast about once a
+  // second and made it effectively invisible. It is position:fixed anyway.
+  const t = el('div', 'cr-toast');
+  t.innerHTML = `<b>${esc(title)}</b><span>${esc(body)}</span>`;
+  document.body.appendChild(t);
+  // Leave long enough to read, then remove so it cannot stack up over a demo.
+  setTimeout(() => { t.classList.add('out'); }, 6000);
+  setTimeout(() => { t.remove(); }, 6600);
 }
 
 $('#courier').addEventListener('click', (e) => {
