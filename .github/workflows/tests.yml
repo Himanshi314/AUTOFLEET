@@ -1,0 +1,44 @@
+name: tests
+
+# Every suite forces the deterministic model path, so this needs no API key, no
+# secrets and no network. It is also dependency-free: the project is stdlib-only,
+# which is why there is no install step here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Show that nothing is installed
+        run: |
+          python -c "import sys; print(sys.version)"
+          # No pip install step anywhere in this job. requirements.txt lists the
+          # Anthropic SDK, which is needed only for that provider — the Groq path
+          # and the whole test suite run on the standard library alone.
+          cat requirements.txt
+
+      - name: Run every suite
+        run: python -X utf8 run_tests.py
+
+      - name: Byte-compile everything that ships
+        run: python -m compileall -q autofleet server.py run_tests.py
+
+      - name: Frontend syntax check
+        run: node --check web/app.js

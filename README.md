@@ -1,5 +1,7 @@
 # AutoFleet AI
 
+[![tests](https://github.com/Himanshi314/AUTOFLEET/actions/workflows/tests.yml/badge.svg)](https://github.com/Himanshi314/AUTOFLEET/actions/workflows/tests.yml)
+
 **Autonomous last-mile disruption resolution.** When a delivery breaks — courier
 breakdown, nobody home, wrong address, gridlock, cold chain slipping — a chain of
 specialised agents wakes on the event and resolves it end to end. Nobody is
@@ -131,6 +133,89 @@ circuity factor, with ETAs from a congestion-scaled speed model.
 
 ---
 
+---
+
+## Intent capture and the pre-commit conflict check
+
+*This is the round-2 capability. Everything else in this README is the MVP it
+extends.*
+
+The chain has one moment where reality changes: the Resource agent proposes a
+reassignment and `world.apply_resolution()` applies it. This sits in front of
+that.
+
+### An intent is not a constraint
+
+The suitability ranker already refuses a courier who is off shift, at capacity,
+lacks a cold box, or cannot beat the cold window. Those are facts about the
+world. An **intent** is a goal a named party *stated*, in their own words, which
+they own and can withdraw — and two of them can be irreconcilable in a way no
+capability check ever is. The recipient wants it before six; the courier's shift
+ends at five forty. Nobody is wrong. Something has to give, and a person should
+choose which.
+
+That distinction is load-bearing, and it caught a design error mid-build: the
+first `shift_limit` and `cold_window` intents simply duplicated constraints the
+ranker already enforced, which would have been a conflict check that could never
+find anything. Both are now strictly *stronger* than feasibility:
+
+| intent | the ranker already checks | the intent adds |
+|---|---|---|
+| `shift_limit` | does the job fit inside the shift at all | the rider asked to keep a **30 min buffer** — 50 min of work in a 70 min shift is feasible and still breaks what they asked for |
+| `cold_window` | does it arrive before the window shuts | the facility needs **20 min of handling margin** — arriving with two minutes left is feasible and still not acceptable to the people receiving it |
+
+Seven kinds in total: recipient deadline, no-substitute handoff, shift buffer,
+cold handling margin, declared refusal, SLA promise, empty-running ceiling.
+
+### Where the check runs
+
+1. **Before anything is proposed**, every shortlisted courier is screened against
+   every applicable intent, and the conflicts go into the Resource agent's prompt
+   so it can choose around them and say why.
+2. **Immediately before commit**, the chosen action is re-checked — because a
+   model given the option to override a stated constraint sometimes takes it.
+
+A **hard** violation blocks. A **soft** one is a cost that gets disclosed, not a
+veto; otherwise every preference becomes a hard stop and the system can no longer
+act at all.
+
+### What happens on a conflict
+
+Substitute the best remaining option that breaks nothing, walking the ranking in
+order. If no option is clean, **commit nothing and escalate** — recorded as a
+human intervention, so the autonomy figure on the dashboard stays honest.
+
+A human then gets four actions, derived from the conflict rather than a fixed
+menu: override a specific intent, keep the original courier, extend the promised
+window, or cancel. Overriding or rescheduling changes the *inputs* and the chain
+**re-runs**; a person withdrawing a constraint is not the same as a person
+picking the courier. Every decision is recorded with actor, clock and — for an
+override — the withdrawn statement by name.
+
+### State exposed, because the brief asked for functional rather than cosmetic
+
+```
+GET  /api/intents          the whole register, plus the clock its deadlines read against
+POST /api/intents/toggle   withdraw or restore one intent
+GET  /api/decisions        pending decisions with their options, plus the decision trail
+POST /api/decisions/resolve  apply one, attributed
+SSE  intent_check          every option x every intent, INCLUDING what passed
+SSE  intent_gate           what was blocked, the arithmetic, and what was done about it
+```
+
+Every conflict reports the figures it was derived from — shift remaining against
+journey length, projected arrival against the stated cutoff — so a reader can
+check the verdict instead of trusting it. A conflict without arithmetic is an
+assertion.
+
+**The demonstration is a toggle.** Same incident, one intent withdrawn, different
+courier committed:
+
+```
+intent binding    -> ranker wanted Meera Joshi, gate fired, committed Suresh Kumar
+intent withdrawn  -> ranker wanted Meera Joshi, gate quiet, committed Meera Joshi
+```
+
 ## Humanitarian mode
 
 Toggle the header switch. Same agents, same models, same ledger — the payload and
@@ -241,12 +326,30 @@ a stalled model costs the prose, never the outcome.
    draws the handover, Arjun turns red, the counters tick, and a banner reads
    **Resolved autonomously** in ~4–5s.
 3. **Click `⚡ Conflicting Assignment` on D-104.** Router says **NO AGENTS
-   NEEDED** — two roles render greyed out with their reason, and `AI calls avoided`
-   ticks up. *This is the routing being visible.*
-4. **Arm `Autonomous`** and stop touching it. The watchdog fires on its own.
-5. **Switch to `Humanitarian`.** Trigger `🌡️ Cold Chain At Risk` and watch drivers
+   NEEDED** — `deterministic` path, 0/6 agents, 6 model calls avoided. *This is the
+   routing being visible.*
+4. **Reset, then click `🔧 Vehicle Breakdown` on D-104.** *The round-2 beat.* The
+   intent check runs before anything is proposed and reports `3 stated intents
+   checked against 2 options · 0 clear, 2 blocked` — both couriers are 17.68 km from
+   the payload against Operations' 8 km ceiling. Nothing is committed. The amber
+   **needs a decision** panel appears with the conflict, the arithmetic and the
+   options actually open. Click **Override Operations's intent** and the chain
+   re-runs with the ceiling withdrawn. `Human interventions` ticks to **1**.
+5. **Arm `Autonomous`** and stop touching it. The watchdog fires on its own — on
+   real risk, roughly every six or seven minutes, so arm it early and let it land.
+6. **Switch to `Humanitarian`.** Trigger `🌡️ Cold Chain At Risk` and watch drivers
    without a cold box get excluded by hard constraint before any scoring.
-6. **Open `Assumptions & models`** when someone asks where the numbers came from.
+7. **Open `Assumptions`** when someone asks where the numbers came from.
+
+Every step above was verified against the live build. Steps 2, 3 and 4 are
+deterministic after a `Reset`:
+
+| trigger | router | outcome |
+|---|---|---|
+| D-102 · Vehicle Breakdown | full chain, 6/6 | resolves to Suresh Kumar |
+| D-102 · Recipient Not Home | partial chain, 4/6, 2 saved | resolves to Arjun Singh |
+| D-104 · Conflicting Assignment | deterministic, 0/6, 6 saved | resolves to Kavya Reddy |
+| D-104 · Vehicle Breakdown | full chain | **escalates** on the approach ceiling |
 
 ---
 
@@ -278,6 +381,34 @@ Worth knowing:
   Communication → Resource → Delivery → Coordinator. Each role needs what came
   before and nothing after, which is why this is a pipeline and there is nothing
   to negotiate.
+
+---
+
+## Tests
+
+```bash
+python run_tests.py            # all 116
+python run_tests.py world      # one suite: routing | intent | world | agents | server
+```
+
+No network, no API key, no install step — every suite forces the deterministic
+model path, so a full run costs nothing and works offline. That is also why CI
+needs no secrets.
+
+| suite | tests | what it guards |
+|---|---|---|
+| `routing` | 8 | the severity router's decision table |
+| `intent` | 42 | conflict evaluators, the pre-commit gate, decisions, register lifecycle |
+| `world` | 24 | delivery lifecycle, ETA from geometry, the clock, drift, escalation slots |
+| `agents` | 20 | fact-checker (including typographic dashes), prompt budget, routing-efficiency ledger |
+| `server` | 22 | the HTTP layer, plus a regression for every defect found by attacking it |
+
+Most of these assert something that was once live and wrong *while looking
+right*: a risk score that ratcheted to "critical" on nothing but elapsed time, a
+hardcoded `"human_interventions": 0` under a dashboard tile that headlined it, an
+ETA parked at 1 min for ever, a JSON array body that killed the request thread.
+A green run does not prove the dashboard looks correct — it proves the failures
+that were invisible stay fixed.
 
 ## Docs
 
