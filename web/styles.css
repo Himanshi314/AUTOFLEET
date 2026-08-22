@@ -1125,3 +1125,50 @@ body {
 .cr-toast.out { animation: toastOut .5s forwards; }
 @keyframes toastIn  { from { opacity: 0; transform: translate(-50%, 14px); } }
 @keyframes toastOut { to   { opacity: 0; transform: translate(-50%, 10px); } }
+
+
+/* ---- Courier: your route ----------------------------------------------- */
+/* Fitted to the rider's own leg, not the city. Two legs when the job was
+   transferred: ride to the payload, then carry it to the recipient. */
+.cr-route {
+  margin-top: 12px; padding: 12px 14px 10px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.cr-route-h {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px;
+}
+.cr-route-h h3 { font-size: 13px; font-weight: 800; color: var(--primary); }
+.cr-route-h span { font-size: 10px; color: var(--ink-3); }
+.cr-route svg {
+  width: 100%; height: auto; display: block;
+  background: #fbfdfc; border-radius: 8px;
+}
+.crt-road  { stroke: #e2ece7; stroke-width: 1.4; stroke-linecap: round; }
+.crt-node  { fill: #cddcd4; }
+.crt-place {
+  fill: #a8bcb1; font-size: 7.5px; font-family: var(--font-mono);
+}
+.crt-leg { stroke-linecap: round; fill: none; }
+.crt-leg.collect {
+  stroke: var(--st-escalated); stroke-width: 2.6; stroke-dasharray: 6 4;
+}
+.crt-leg.deliver { stroke: var(--accent-dark); stroke-width: 2.8; }
+.crt-mk text {
+  font: 700 8.5px var(--font-mono); letter-spacing: .01em;
+}
+.crt-mk.you    circle { fill: #fff; stroke: var(--primary); stroke-width: 2.6; }
+.crt-mk.you    text   { fill: var(--primary); }
+.crt-mk.collect circle { fill: #fff; stroke: var(--st-escalated); stroke-width: 2.4; }
+.crt-mk.collect text   { fill: var(--st-escalated); }
+.crt-mk.drop   circle { fill: var(--accent-dark); stroke: #fff; stroke-width: 1.8; }
+.crt-mk.drop   text   { fill: var(--accent-dark); }
+.cr-route-legend {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px;
+  font-size: 10.5px; color: var(--ink-3);
+}
+.cr-route-legend span { display: flex; align-items: center; gap: 5px; }
+.crt-sw { width: 14px; height: 0; border-top-width: 2.6px; border-top-style: solid; }
+.crt-sw.collect { border-top-color: var(--st-escalated); border-top-style: dashed; }
+.crt-sw.deliver { border-top-color: var(--accent-dark); }

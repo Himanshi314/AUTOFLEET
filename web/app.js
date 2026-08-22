@@ -558,6 +558,7 @@ function renderCourier() {
 
       ${welfare}
       ${jobCard}
+      ${courierRoute(job, drv)}
       ${reportPanel}
     </div>`;
 
@@ -572,6 +573,111 @@ function renderCourier() {
       `Collect at ${h.collect_at || 'the handover point'} · ETA ${nf(job.eta_minutes, 0)} min`
     );
   }
+}
+
+/* The rider's own route. The operations map shows the whole city, which is not
+   what the person on the bike needs: they need their next two moves. This fits
+   the view to just their leg(s) — current position, the collection point if the
+   job was transferred to them, and the drop — so the geometry is legible at
+   phone size. Same coordinates and same projector as the fleet map, so the two
+   views can never disagree about where anything is. */
+function courierRoute(job, drv) {
+  const st = App.state;
+  if (!st || !job || !drv || !job.destination_at) return '';
+
+  const from = drv.at;
+  const collect = job.reassigned && job.driver_id === drv.id ? job.handover_at : null;
+  const drop = job.destination_at;
+  const legPts = [from, collect, drop].filter(Boolean);
+  if (legPts.length < 2) return '';
+
+  // Fit to the rider's own leg rather than the city, with a margin so the
+  // markers and their labels are never clipped at the edge.
+  const lats = legPts.map((p) => p[0]);
+  const lons = legPts.map((p) => p[1]);
+  const padLat = Math.max((Math.max(...lats) - Math.min(...lats)) * 0.42, 0.008);
+  const padLon = Math.max((Math.max(...lons) - Math.min(...lons)) * 0.42, 0.008);
+  const b = {
+    min_lat: Math.min(...lats) - padLat, max_lat: Math.max(...lats) + padLat,
+    min_lon: Math.min(...lons) - padLon, max_lon: Math.max(...lons) + padLon,
+  };
+  const W = 640, H = 230, P = 24;
+  const proj = projector(b, W, H, P);
+  const inView = (p) =>
+    p[0] >= b.min_lat && p[0] <= b.max_lat && p[1] >= b.min_lon && p[1] <= b.max_lon;
+
+  const nodeById = {};
+  (st.map.nodes || []).forEach((n) => { nodeById[n.id] = n; });
+
+  // Context: the surrounding road graph, kept deliberately faint.
+  const roads = (st.map.roads || []).map((r) => {
+    const a = nodeById[r.from], c = nodeById[r.to];
+    if (!a || !c) return '';
+    const [x1, y1] = proj(a.at[0], a.at[1]);
+    const [x2, y2] = proj(c.at[0], c.at[1]);
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"
+                  x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="crt-road"/>`;
+  }).join('');
+
+  const places = (st.map.nodes || []).filter((n) => inView(n.at)).map((n) => {
+    const [x, y] = proj(n.at[0], n.at[1]);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" class="crt-node"/>
+            <text x="${(x + 6).toFixed(1)}" y="${(y + 3).toFixed(1)}"
+                  class="crt-place">${esc(n.name)}</text>`;
+  }).join('');
+
+  const pt = (p) => proj(p[0], p[1]);
+  const [fx, fy] = pt(from);
+  const [dx, dy] = pt(drop);
+
+  let legs = '', marks = '';
+  if (collect) {
+    const [cx, cy] = pt(collect);
+    // Two legs, drawn differently because they mean different things: ride to
+    // the payload, then carry it to the recipient.
+    legs = `
+      <line x1="${fx.toFixed(1)}" y1="${fy.toFixed(1)}"
+            x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" class="crt-leg collect"/>
+      <line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}"
+            x2="${dx.toFixed(1)}" y2="${dy.toFixed(1)}" class="crt-leg deliver"/>`;
+    marks = `
+      <g class="crt-mk collect">
+        <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="6"/>
+        <text x="${(cx + 10).toFixed(1)}" y="${(cy - 7).toFixed(1)}">1 · Collect payload</text>
+      </g>`;
+  } else {
+    legs = `<line x1="${fx.toFixed(1)}" y1="${fy.toFixed(1)}"
+                  x2="${dx.toFixed(1)}" y2="${dy.toFixed(1)}" class="crt-leg deliver"/>`;
+  }
+
+  const n1 = collect ? '2' : '1';
+  marks = `
+    <g class="crt-mk you">
+      <circle cx="${fx.toFixed(1)}" cy="${fy.toFixed(1)}" r="7"/>
+      <text x="${(fx + 11).toFixed(1)}" y="${(fy + 4).toFixed(1)}">You</text>
+    </g>` + marks + `
+    <g class="crt-mk drop">
+      <circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="6"/>
+      <text x="${(dx + 10).toFixed(1)}" y="${(dy + 4).toFixed(1)}">${n1} · ${esc(job.destination_name)}</text>
+    </g>`;
+
+  const legend = collect
+    ? `<span><i class="crt-sw collect"></i>ride to the payload</span>
+       <span><i class="crt-sw deliver"></i>carry it to ${esc(job.recipient)}</span>`
+    : `<span><i class="crt-sw deliver"></i>to ${esc(job.recipient)} at ${esc(job.destination_name)}</span>`;
+
+  return `
+    <div class="cr-route">
+      <div class="cr-route-h">
+        <h3>Your route</h3>
+        <span class="mono">${collect ? 'two legs · collect, then deliver' : 'direct'}</span>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+           role="img" aria-label="Your route">
+        <g>${roads}</g><g>${places}</g><g>${legs}</g><g>${marks}</g>
+      </svg>
+      <div class="cr-route-legend">${legend}</div>
+    </div>`;
 }
 
 function courierToast(title, body) {
