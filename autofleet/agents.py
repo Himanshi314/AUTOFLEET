@@ -719,6 +719,11 @@ def run_chain(
                    f"resolution.",
         })
         world.deliveries[delivery_id]["status"] = "Escalated"
+        # A person now has to deal with this, so the dashboard must say so.
+        world.ledger.record_escalation(
+            incident_id=incident_id, delivery_id=delivery_id,
+            reason=plan["reason"],
+        )
         emit({"type": "state", "state": world.snapshot()})
         emit({
             "type": "escalated", "incident_id": incident_id,

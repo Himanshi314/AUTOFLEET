@@ -44,6 +44,16 @@ FLEET_TARGET = 4
 SHIFT_MINUTES = 210
 REST_TICKS = 25
 
+# Not every delivery is routine. A real book has a tail: an address the geocoder
+# is unsure of, a recipient with a history of being out, a corridor that is
+# already bad. Drawing every spawned job from one benign distribution left the
+# risk model with nothing to flag and the autonomous watchdog firing about once
+# an hour — the model is calibrated to sit healthy deliveries well below the
+# alert line and stressed ones near it, which only means something if stressed
+# deliveries actually occur. This is the tail, not a thumb on the scale: the
+# features are worse, and the score is whatever the model makes of them.
+DIFFICULT_JOB_SHARE = 0.28
+
 # Recipients and payloads for respawned jobs. Names only — no addresses, no
 # real people.
 _COMMERCIAL_JOBS = [
@@ -722,6 +732,7 @@ class World:
         recipient, payload, units = self.rng.choice(
             _HUMANITARIAN_JOBS if self.is_humanitarian else _COMMERCIAL_JOBS
         )
+        difficult = self.rng.random() < DIFFICULT_JOB_SHARE
         origin = self.hub
         # A new job starts at the depot, so the courier is dispatched from there.
         drv["at"] = coord(origin)
@@ -743,16 +754,27 @@ class World:
             "payload": payload,
             "payload_units": units,
             "cold_chain": self.is_humanitarian,
-            "address_confidence": round(self.rng.uniform(0.70, 0.97), 2),
-            "recipient_absence_rate": round(self.rng.uniform(0.05, 0.22), 2),
+            "address_confidence": round(
+                self.rng.uniform(0.42, 0.68) if difficult
+                else self.rng.uniform(0.78, 0.97), 2),
+            "recipient_absence_rate": round(
+                self.rng.uniform(0.28, 0.52) if difficult
+                else self.rng.uniform(0.04, 0.18), 2),
             # Set once the ETA is known, just below — the promise has to scale
             # with the journey, or a cross-city run is "late" the moment it
             # leaves the depot.
             "slack_minutes": 0.0,
             "telemetry": {
-                "traffic_index": round(self.rng.uniform(0.30, 0.60), 2),
-                "weather_risk": round(self.rng.uniform(0.08, 0.22), 2),
+                "traffic_index": round(
+                    self.rng.uniform(0.55, 0.82) if difficult
+                    else self.rng.uniform(0.28, 0.55), 2),
+                "weather_risk": round(
+                    self.rng.uniform(0.18, 0.38) if difficult
+                    else self.rng.uniform(0.06, 0.20), 2),
             },
+            # Recorded so the UI can say why a delivery looks bad, and so this
+            # is auditable rather than an invisible dice roll.
+            "difficult": difficult,
             "incidents": [],
             "reroute": None,
             "handover_at": None,

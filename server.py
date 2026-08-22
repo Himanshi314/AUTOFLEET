@@ -85,6 +85,13 @@ class Engine:
         self.llm = make_llm()
         self.autonomous = False
         self.incidents: queue.Queue = queue.Queue()
+        # Deliveries with an incident already waiting. The "already being
+        # resolved" check only covers the one IN the chain, so without this a
+        # dozen impatient clicks queue a dozen incidents against four
+        # deliveries and lock the demo out for minutes with no way to clear it
+        # short of a reset.
+        self._pending: set[str] = set()
+        self._pending_lock = threading.Lock()
         self._auto_fired: set[str] = set()
         self._chain_active = threading.Event()
         self._stop = threading.Event()
@@ -104,6 +111,23 @@ class Engine:
             return {"ok": False, "error": f"{delivery_id} is already being resolved"}
         if status in ("Delivered", "Cancelled"):
             return {"ok": False, "error": f"{delivery_id} is already {status.lower()}"}
+        # Mode gating was declared in meta() for the UI but never enforced here,
+        # so a direct call could run "Cold Chain At Risk" against a commercial
+        # parcel that has no cold chain — the agents would reason about
+        # consignment integrity and doses for a box of electronics.
+        if disruption_key not in self.disruptions_for_mode():
+            return {
+                "ok": False,
+                "error": f"{DISRUPTIONS[disruption_key]['label']} does not apply "
+                         f"in {self.world.mode} mode",
+            }
+        with self._pending_lock:
+            if delivery_id in self._pending:
+                return {
+                    "ok": False,
+                    "error": f"{delivery_id} already has an incident waiting",
+                }
+            self._pending.add(delivery_id)
         self.incidents.put((delivery_id, disruption_key, trigger))
         depth = self.incidents.qsize()
         if depth > 1 or self._chain_active.is_set():
@@ -124,7 +148,10 @@ class Engine:
                 self.incidents.task_done()
                 dropped += 1
             except queue.Empty:
-                return dropped
+                break
+        with self._pending_lock:
+            self._pending.clear()
+        return dropped
 
     def set_mode(self, mode: str) -> Dict:
         if mode not in ("commercial", "humanitarian"):
@@ -169,6 +196,18 @@ class Engine:
         })
         return {"ok": True, "enabled": self.autonomous}
 
+    @staticmethod
+    def modes_for(disruption_key: str) -> List[str]:
+        """Scenarios a disruption can occur in. Single source of truth: meta()
+        publishes it to the UI and enqueue() enforces it, so the two cannot
+        drift apart."""
+        if disruption_key == "cold_chain_breach":
+            return ["humanitarian"]
+        return ["commercial", "humanitarian"]
+
+    def disruptions_for_mode(self) -> List[str]:
+        return [k for k in DISRUPTIONS if self.world.mode in self.modes_for(k)]
+
     # -- metadata -----------------------------------------------------------
 
     def meta(self) -> Dict:
@@ -184,10 +223,7 @@ class Engine:
                     # corridor gridlock, and ops cannot see a damaged parcel.
                     "reported_by": v["reported_by"],
                     "reported_why": v["reported_why"],
-                    "modes": (
-                        ["humanitarian"] if k == "cold_chain_breach"
-                        else ["commercial", "humanitarian"]
-                    ),
+                    "modes": self.modes_for(k),
                 }
                 for k, v in DISRUPTIONS.items()
             ],
@@ -269,6 +305,11 @@ class Engine:
                 delivery_id, disruption_key, trigger = self.incidents.get(timeout=0.5)
             except queue.Empty:
                 continue
+            # Released as soon as it leaves the queue: from here the "already
+            # being resolved" status check is what guards it. Forgetting this
+            # would block that delivery for the rest of the session.
+            with self._pending_lock:
+                self._pending.discard(delivery_id)
             self._chain_active.set()
             try:
                 run_chain(
@@ -376,13 +417,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body(self) -> Dict:
+        """Parsed JSON object, or {} for anything that is not one.
+
+        Valid JSON that is not an object — `[1,2,3]`, `"hi"`, `42` — used to be
+        returned as-is, and the route handlers then called .get() on it and
+        raised AttributeError, killing the request thread and printing a
+        traceback wall to the console. Callers want a mapping or nothing.
+        """
         try:
             length = int(self.headers.get("Content-Length") or 0)
             if not length:
                 return {}
-            return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-        except (ValueError, json.JSONDecodeError):
+            parsed = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     # -- routes -------------------------------------------------------------
 

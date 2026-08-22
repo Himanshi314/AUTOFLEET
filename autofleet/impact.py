@@ -130,6 +130,13 @@ class ImpactLedger:
 
     def __init__(self) -> None:
         self.entries: List[Dict] = []
+        # Incidents the system handed to a person because it could not act. The
+        # dashboard headlines "human interventions", so this must be counted
+        # rather than asserted — it used to be a hardcoded 0, which meant an
+        # escalation to a human dispatcher still displayed as zero humans
+        # involved. That is the one number on the page nobody would think to
+        # doubt, which is exactly why it has to be real.
+        self.escalations: List[Dict] = []
 
     def record(
         self,
@@ -161,10 +168,23 @@ class ImpactLedger:
         self.entries.append(entry)
         return entry
 
+    def record_escalation(
+        self, *, incident_id: str, delivery_id: str, reason: str
+    ) -> Dict:
+        """Log an incident the system could not resolve on its own."""
+        entry = {
+            "incident_id": incident_id,
+            "delivery_id": delivery_id,
+            "reason": reason,
+        }
+        self.escalations.append(entry)
+        return entry
+
     def totals(self) -> Dict:
         return {
             "incidents_resolved": len(self.entries),
-            "human_interventions": 0,
+            "human_interventions": len(self.escalations),
+            "escalations": len(self.escalations),
             "km_avoided": round(sum(e["km_avoided"] for e in self.entries), 1),
             "co2e_kg_avoided": round(sum(e["co2e_kg_avoided"] for e in self.entries), 2),
             "coordinator_minutes_saved": round(
@@ -180,3 +200,4 @@ class ImpactLedger:
 
     def reset(self) -> None:
         self.entries.clear()
+        self.escalations.clear()
