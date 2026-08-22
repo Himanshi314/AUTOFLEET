@@ -11,7 +11,6 @@ export function useFleetStream() {
   const [pickedDriver, setPickedDriver] = useState(null);
   const [activeIncidentCount, setActiveIncidentCount] = useState(0);
   const [impactSeries, setImpactSeries] = useState([]);
-  const [recoveryEvents, setRecoveryEvents] = useState([]);
 
   const eventSourceRef = useRef(null);
 
@@ -101,7 +100,6 @@ export function useFleetStream() {
           setActiveChain(null);
           setCurrentAlert(null);
           setImpactSeries([]);
-          setRecoveryEvents([]);
         }
         break;
 
@@ -129,16 +127,6 @@ export function useFleetStream() {
 
       case 'autonomous':
         setMeta(prev => prev ? { ...prev, autonomous: ev.enabled } : prev);
-        break;
-
-      case 'event':
-        if (ev.event) {
-          setRecoveryEvents(prev => [{ ...ev, receivedAt: timestamp }, ...prev].slice(0, 40));
-          setTerminalLogs(prev => [
-            ...prev.slice(-99),
-            `[${timestamp}] [RECOVERY] ${ev.event}${ev.driver_id ? ` · ${ev.driver_id}` : ''}${ev.reason ? ` · ${ev.reason}` : ''}`
-          ]);
-        }
         break;
 
       case 'risk_alert':
@@ -418,7 +406,6 @@ export function useFleetStream() {
       setActiveChain(null);
       setCurrentAlert(null);
       setPickedDriver(null);
-      setRecoveryEvents([]);
       return await res.json();
     } catch (e) {
       console.error('Reset fleet error', e);
@@ -441,7 +428,6 @@ export function useFleetStream() {
     setAutonomous,
     resetFleet,
     activeIncidentCount,
-    impactSeries,
-    recoveryEvents
+    impactSeries
   };
 }
