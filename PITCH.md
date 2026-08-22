@@ -260,3 +260,54 @@ Answer honestly whichever is true. If simulated:
    version is more persuasive than the inflated one, and it survives follow-ups.
 5. **If asked something nobody knows:** *"We don't know yet — here's how we'd find
    out."* That's a good answer, not a bad one.
+
+---
+
+## 6. The business block — 45 seconds, for an international panel
+
+Two insertions, not a new section of the talk. Both go where the screen is
+already showing the thing being described, which is why they cost so little
+time.
+
+### Insertion A — inside the conflict-check beat, 10 seconds
+
+Say this immediately after the override lands, while the audit line is on
+screen:
+
+> "And this isn't just good practice. In the EU, AI that allocates work to
+> people is regulated as high-risk — it needs logging, human oversight, and a
+> record of who decided what. That panel you just watched **is** that record."
+
+Why it works here: you are pointing at the artifact while describing the
+requirement it satisfies. No slide, no claim to take on trust.
+
+**Do not** quote article numbers or dates. If pressed: *"I'd want to confirm the
+exact article before quoting it, but the obligation is logging, human oversight
+and traceability for task-allocation systems."* That answer is stronger than a
+wrong citation.
+
+### Insertion B — before the honest-limits close, 15 seconds
+
+> "Quick word on the business. We don't sell software seats — our whole value is
+> needing fewer coordinators, so charging per seat would mean earning more when
+> we work worse. We sell resolved exceptions. Carriers already spend this money,
+> just on coordinator salaries and redelivery fuel. Five mid-size carriers is
+> roughly seven hundred thousand dollars a year."
+
+### If a judge pulls the thread
+
+**"Why wouldn't a carrier build this?"** — Be consistent with the honest moat
+section: the agent chain is not the moat and we say so. What compounds is the
+resolution-policy library, the integration surface across TMS variants, and the
+trust record. And now the audit trail: rebuilding the pipeline is a weekend;
+rebuilding a defensible decision record you can hand a regulator is not.
+
+**"Is the regulation actually a buying trigger, or a nice-to-have?"** — Honest
+answer: today it is a tiebreaker, not the reason the first cheque gets signed.
+The first cheque is signed on exception-desk headcount. The regulation is why the
+buyer picks the auditable option over the cheaper one, and why the second and
+third cheque are easier.
+
+**"What's your revenue today?"** — Zero. No pilot, no integration, no rider
+interviewed yet. Say it flatly and move on; the numbers above are a model, and
+calling a model a forecast is how teams lose credibility.

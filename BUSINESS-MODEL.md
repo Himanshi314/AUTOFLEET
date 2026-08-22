@@ -226,6 +226,88 @@ Naming these makes the model credible rather than weaker.
 
 ---
 
+---
+
+## 11. International positioning — where the pain is, where the budget is
+
+The sections above are built bottom-up on Indian accounts, which is the right
+beachhead. This section is how the same business reads to a non-Indian audience,
+because the framing changes even though the plan does not.
+
+### What travels, and what does not
+
+**Travels.** Every carrier on earth runs an exception desk, and staffs it with
+people on phones. The failure *rate* differs by market; the *shape* of the
+problem does not.
+
+**Does not travel.** Address-confidence as a disruption is largely an
+emerging-market problem — geocoding quality in the EU and US is materially
+better, so "Address Mismatch" is a weaker story there. Rupee figures and the
+Indian account list mean nothing to a foreign panel without conversion. And
+"10–20 minutes of manual coordination per exception" is OUR assumption, drawn
+from the stated manual window — it is not a global statistic and must never be
+presented as one.
+
+### The regulatory wedge — the strongest international card
+
+This is the part missing from every competing pitch, and it is the reason this is
+a harder business to copy than an optimiser.
+
+In the EU, AI used for **task allocation** in a work relationship is treated as
+high-risk. The obligations that follow are logging and traceability, human
+oversight of significant decisions, and explainability. Separately, the EU
+Platform Work Directive requires transparency about algorithmic management and a
+route for human review of automated decisions affecting platform workers.
+
+Map that against what this system already produces:
+
+| The regulation asks for | What AutoFleet already emits |
+|---|---|
+| Traceable automated decisions | Every agent's input and output, per incident |
+| Human oversight of significant decisions | The pre-commit intent gate and the decision surface |
+| Attribution — who decided, and when | The decision ledger: actor, clock, action, withdrawn intent by name |
+| Explainability of the decision | Decomposable models, stated weights, per-conflict arithmetic |
+| Worker-affecting decisions on the record | Courier release, support dispatched, earnings protected |
+
+**The positioning that follows:** we are not selling a logistics optimiser that
+happens to log things. We are selling an **auditable task-allocation system**
+that happens to do logistics. An incumbent can rebuild the agent chain in a
+weekend — Section 8 says so honestly — but auditability of this shape is
+architectural, not a feature bolted on later.
+
+**Timing.** The high-risk obligations phase in over 2026, which makes "why now"
+a real answer rather than a manufactured one.
+
+> **Verify before quoting.** The substance above — task allocation being in
+> scope, the oversight and logging duties, the Platform Work Directive covering
+> algorithmic management — is sound. Specific article numbers and transposition
+> dates are NOT verified here and must be checked before being said on a stage
+> or written into a deck. A judge who works in this area will know them better
+> than we do, and being approximately right about the law is worse than saying
+> "we would need to confirm the exact article."
+
+### Geography, reversed
+
+The India-first plan stays exactly as it is. For an international audience,
+state the logic rather than the location:
+
+> Highest exception rates are in emerging markets. Highest compliance budget for
+> auditable automation is in the EU. We build where the pain is and sell where
+> the budget is — the same product, entered from two directions.
+
+### Numbers in a currency they think in
+
+| | Local | For an international panel |
+|---|---|---|
+| Beachhead — 5 mid-size carriers | ~₹6Cr ARR | **~$700k ARR** |
+| Serviceable India opportunity | ₹135–225Cr ARR | **~$16–27M ARR** |
+| Value delivered per resolved exception | ₹60–100 | **~$0.70–1.20** |
+
+Lead with the beachhead, not the serviceable total. A credible $700k beats an
+unfalsifiable $27M in every room.
+
+---
+
 ## Appendix — where each number comes from
 
 | Figure | Source |
