@@ -21,6 +21,51 @@ from .scoring import RISK_MODEL
 # Doorstep / handover time added to every ETA, in minutes. ASSUMPTION.
 SERVICE_MINUTES = 6.0
 
+# Simulation clock. One drift tick is DRIFT_INTERVAL_SECONDS of real time (2.2s
+# in server.py) and this many simulated minutes. Every time-based quantity —
+# ETA, slack, shift, fatigue, cold-chain window — is scaled by this single
+# constant so they cannot drift out of step with each other. The old code used
+# four different rates (0.35, 0.30, 2.0, 0.03/h) which is why slack hit zero
+# while the ETA was still counting.
+SIM_MINUTES_PER_TICK = 0.6
+
+# On-road distance at which a courier counts as arrived.
+ARRIVAL_KM = 0.25
+
+# How long a delivered job stays on the board before being retired, so an
+# operator actually sees it land rather than having rows vanish mid-glance.
+DELIVERED_LINGER_TICKS = 6
+
+# Active jobs the sim keeps in flight. A completed delivery is replaced so the
+# board never empties during a demo.
+FLEET_TARGET = 4
+
+# Shift length and the rest between shifts, in simulated minutes / ticks.
+SHIFT_MINUTES = 210
+REST_TICKS = 25
+
+# Recipients and payloads for respawned jobs. Names only — no addresses, no
+# real people.
+_COMMERCIAL_JOBS = [
+    ("Rohan Mehta", "1 parcel · electronics return", 2),
+    ("Sneha Kulkarni", "2 parcels · retail", 4),
+    ("Vikram Shetty", "1 pallet · bulk plastics", 30),
+    ("Ananya Iyer", "1 parcel · e-waste pickup", 3),
+    ("Deepa Rao", "3 parcels · retail", 6),
+    ("Karthik Nair", "1 crate · appliance return", 12),
+    ("Meghna Bose", "1 parcel · documents", 1),
+    ("Arvind Menon", "2 crates · e-waste pickup", 14),
+]
+
+_HUMANITARIAN_JOBS = [
+    ("Anekal PHC · cold room", "cold-chain vaccine consignment", 18),
+    ("Hoskote PHC · blood bank", "blood products consignment", 22),
+    ("Magadi PHC · Dr. Ramesh K", "cold-chain vaccine consignment", 12),
+    ("Ramanagara DH · cold room", "cold-chain vaccine consignment", 30),
+    ("Nelamangala PHC · Dr. Asha R", "insulin and cold stock", 15),
+    ("Doddaballapur CHC · cold room", "cold-chain vaccine consignment", 26),
+]
+
 COMMERCIAL_NODES = [
     "hub_yeshwanthpur", "malleshwaram", "rajajinagar", "mg_road", "indiranagar",
     "koramangala", "hsr_layout", "jayanagar", "banashankari", "marathahalli",
@@ -387,6 +432,10 @@ class World:
         # aborts if the world is reset or the scenario switched underneath it,
         # rather than half-applying a decision to state that no longer exists.
         self.generation = 0
+        # Ids for respawned deliveries continue past the seeded ones, so a job
+        # number is never reused within a session.
+        self.delivery_seq = 0
+        self.completed = 0
         self._load(mode)
 
     # -- lifecycle ----------------------------------------------------------
@@ -397,6 +446,8 @@ class World:
         self.generation = getattr(self, "generation", 0) + 1
         self.drivers = {d["id"]: d for d in state["drivers"]}
         self.deliveries = {d["id"]: d for d in state["deliveries"]}
+        self.delivery_seq = len(state["deliveries"])
+        self.completed = 0
         for d in self.deliveries.values():
             drv = self.drivers[d["driver_id"]]
             drv["assigned_delivery"] = d["id"]
@@ -418,6 +469,11 @@ class World:
                     self.is_humanitarian,
                 ) + SERVICE_MINUTES,
                 1,
+            )
+            # Seeded jobs carry a hand-set slack; turn it into the same
+            # promise-based representation the rest of the sim uses.
+            d["promised_minutes"] = round(
+                d["eta_minutes"] + d.get("slack_minutes", 12.0), 1
             )
         self.tick = 0
 
@@ -447,48 +503,274 @@ class World:
 
     # -- telemetry ----------------------------------------------------------
 
+    def _remaining_km(self, d: Dict) -> float:
+        """On-road distance the carrier still has to cover for this delivery.
+
+        A reassigned courier has two legs — ride to the payload, then carry it —
+        so the remaining distance is the sum. Measuring from the driver's live
+        position rather than counting down a stored number is what keeps the ETA,
+        the map and the courier's route agreeing with each other.
+        """
+        drv = self.drivers.get(d["driver_id"])
+        if not drv:
+            return 0.0
+        dest = coord(d["destination"])
+        collect = d.get("handover_at")
+        if collect and d.get("status") == "Reassigned":
+            return road_km(drv["at"], tuple(collect)) + road_km(tuple(collect), dest)
+        return road_km(drv["at"], dest)
+
+    def _recompute_eta(self, d: Dict) -> None:
+        """Derive the ETA from live geometry and live congestion.
+
+        The old drift subtracted a flat 0.35 from a stored value and floored it
+        at 1.0, which meant the ETA was a countdown disconnected from the world:
+        it ignored congestion entirely and every delivery ended up parked at
+        "1 min" forever without arriving. Now it is a function of where the
+        courier actually is and how bad the corridor actually is, so it can rise
+        when traffic worsens — which is the entire point of showing it.
+        """
+        d["eta_minutes"] = round(
+            travel_minutes(
+                self._remaining_km(d),
+                d["telemetry"]["traffic_index"],
+                self.is_humanitarian,
+            ) + SERVICE_MINUTES,
+            1,
+        )
+
+    def _advance(self, d: Dict) -> None:
+        """Move the carrier along their route by one tick's worth of travel."""
+        drv = self.drivers.get(d["driver_id"])
+        if not drv:
+            return
+        remaining = self._remaining_km(d)
+        if remaining <= 0:
+            return
+        speed_kmh = remaining / max(
+            travel_minutes(remaining, d["telemetry"]["traffic_index"],
+                           self.is_humanitarian) / 60.0,
+            1e-6,
+        )
+        step_km = speed_kmh * (SIM_MINUTES_PER_TICK / 60.0)
+
+        # Aim at the collection point first if the payload is not yet in hand.
+        collect = d.get("handover_at")
+        if collect and d.get("status") == "Reassigned":
+            to_collect = road_km(drv["at"], tuple(collect))
+            if to_collect > ARRIVAL_KM:
+                drv["at"] = _lerp(drv["at"], tuple(collect),
+                                  min(1.0, step_km / max(to_collect, 1e-6)))
+                return
+            # Payload collected — from here it is a normal run to the drop.
+            d["handover_at"] = None
+
+        dest = coord(d["destination"])
+        to_dest = road_km(drv["at"], dest)
+        drv["at"] = _lerp(drv["at"], dest, min(1.0, step_km / max(to_dest, 1e-6)))
+        journey = road_km(coord(d["origin"]), dest)
+        d["progress"] = min(1.0, 1.0 - (road_km(drv["at"], dest) / max(journey, 1e-6)))
+
+    def _complete(self, d: Dict) -> None:
+        """Deliver it: free the courier and retire the job."""
+        d["status"] = "Delivered"
+        d["eta_minutes"] = 0.0
+        d["progress"] = 1.0
+        d["delivered_tick"] = self.tick
+        drv = self.drivers.get(d["driver_id"])
+        if drv:
+            drv["assigned_delivery"] = None
+            drv["active_load"] = max(0, drv["active_load"] - 1)
+            # A courier who was released earlier stays off the road; anyone else
+            # is free for the next job.
+            if drv["status"] != "unavailable":
+                drv["status"] = "available"
+        self.completed += 1
+
+    def _rest_driver(self, drv: Dict) -> None:
+        """End of shift: the courier goes home and a rested one takes over.
+
+        Without this, fatigue and vehicle wear only ever went up. Three of the
+        risk model's seven features had no recovery path, so every delivery
+        drifted to "critical" on nothing but elapsed time — and the autonomous
+        watchdog, which fires at 0.68, would eventually trigger on the whole
+        fleet by itself. Shifts end in reality; now they end here too.
+        """
+        drv["status"] = "off_shift"
+        drv["assigned_delivery"] = None
+        drv["rest_until_tick"] = self.tick + REST_TICKS
+        drv["hours_on_shift"] = 0.0
+        drv["shift_remaining_minutes"] = float(SHIFT_MINUTES)
+        # Pre-shift inspection: wear is serviced between shifts, not mid-route.
+        drv["vehicle_health_risk"] = round(self.rng.uniform(0.04, 0.12), 3)
+
     def drift(self) -> None:
         """One simulation step: bounded random walk on live telemetry.
 
-        This stands in for a real telematics feed. It moves congestion, weather
-        and fatigue; it does not move any figure that appears in the impact
+        This stands in for a real telematics feed. It moves congestion, weather,
+        fatigue and position, completes deliveries that have arrived and starts
+        replacements; it does not move any figure that appears in the impact
         ledger.
         """
         with self.lock:
             self.tick += 1
-            for d in self.deliveries.values():
+
+            for d in list(self.deliveries.values()):
                 if d["status"] in ("Delivered", "Cancelled"):
                     continue
                 t = d["telemetry"]
                 t["traffic_index"] = self._walk(t["traffic_index"], 0.055, 0.05, 0.97, 0.48)
                 t["weather_risk"] = self._walk(t["weather_risk"], 0.02, 0.02, 0.85, 0.18)
+
                 if d["status"] in ("On Route", "Rerouted", "Reassigned"):
-                    d["eta_minutes"] = max(1.0, d["eta_minutes"] - 0.35)
-                    d["slack_minutes"] = max(0.0, d["slack_minutes"] - 0.30)
-                    d["progress"] = min(0.94, d["progress"] + 0.012)
-                    drv = self.drivers.get(d["driver_id"])
-                    # Only the original carrier tracks the corridor; a newly
-                    # assigned driver is still approaching from where they were.
-                    if drv and drv["id"] == d["original_driver_id"]:
-                        drv["at"] = _lerp(
-                            coord(d["origin"]), coord(d["destination"]), d["progress"]
-                        )
-                if d.get("cold_chain"):
-                    d["cold_minutes_remaining"] = max(
-                        0.0, d.get("cold_minutes_remaining", 0.0) - 2.0
+                    self._advance(d)
+                    self._recompute_eta(d)
+                    # Slack is time to spare against the promised window:
+                    # whatever is left of the promise, minus the journey still
+                    # ahead. Decrementing it every tick (as this used to) made
+                    # it drain to zero even when the courier was dead on
+                    # schedule, which pinned schedule_pressure at 1.0 for the
+                    # rest of the delivery's life. Now it only shrinks when they
+                    # genuinely fall behind — congestion rising, or a disruption
+                    # adding a penalty — which is what the feature is meant to
+                    # detect.
+                    d["promised_minutes"] = round(max(
+                        0.0, d.get("promised_minutes", d["eta_minutes"]) - SIM_MINUTES_PER_TICK
+                    ), 1)
+                    d["slack_minutes"] = max(
+                        0.0, round(d["promised_minutes"] - d["eta_minutes"], 1)
                     )
+                    if self._remaining_km(d) <= ARRIVAL_KM and not d.get("handover_at"):
+                        self._complete(d)
+
+                if d.get("cold_chain") and d["status"] not in ("Delivered", "Cancelled"):
+                    d["cold_minutes_remaining"] = round(max(
+                        0.0, d.get("cold_minutes_remaining", 0.0) - SIM_MINUTES_PER_TICK
+                    ), 1)
+
             for drv in self.drivers.values():
-                if drv["status"] == "on_route":
-                    drv["hours_on_shift"] = min(11.0, drv["hours_on_shift"] + 0.03)
-                    drv["shift_remaining_minutes"] = max(
-                        0.0, drv["shift_remaining_minutes"] - 2.0
-                    )
-                    # Vehicle wear only accumulates during a shift — no reversion.
-                    drv["vehicle_health_risk"] = min(
-                        0.95,
-                        max(0.02, drv["vehicle_health_risk"]
-                            + self.rng.uniform(-0.004, 0.014)),
-                    )
+                if drv["status"] == "off_shift":
+                    if self.tick >= drv.get("rest_until_tick", 0):
+                        drv["status"] = "available"
+                        drv.pop("rest_until_tick", None)
+                    continue
+                if drv["status"] != "on_route":
+                    continue
+                drv["hours_on_shift"] = round(
+                    min(11.0, drv["hours_on_shift"] + SIM_MINUTES_PER_TICK / 60.0), 4
+                )
+                drv["shift_remaining_minutes"] = round(max(
+                    0.0, drv["shift_remaining_minutes"] - SIM_MINUTES_PER_TICK
+                ), 1)
+                # Wear accumulates within a shift and is serviced between them.
+                drv["vehicle_health_risk"] = min(
+                    0.95,
+                    max(0.02, drv["vehicle_health_risk"]
+                        + self.rng.uniform(-0.0004, 0.0016)),
+                )
+
+            # A courier whose shift ran out goes home once they are not carrying.
+            for drv in self.drivers.values():
+                if (drv["status"] == "available"
+                        and drv["shift_remaining_minutes"] <= 0.0):
+                    self._rest_driver(drv)
+
+            self._retire_and_refill()
+
+    def _retire_and_refill(self) -> None:
+        """Drop delivered jobs off the board and keep the fleet working.
+
+        Called with the lock held.
+        """
+        # Keep a completed job visible briefly so the operator sees it land.
+        for did, d in list(self.deliveries.items()):
+            if (d["status"] == "Delivered"
+                    and self.tick - d.get("delivered_tick", self.tick) >= DELIVERED_LINGER_TICKS):
+                del self.deliveries[did]
+
+        active = [d for d in self.deliveries.values()
+                  if d["status"] not in ("Delivered", "Cancelled")]
+        while len(active) < FLEET_TARGET:
+            new = self._spawn_delivery()
+            if new is None:
+                break
+            active.append(new)
+
+    def _spawn_delivery(self) -> Optional[Dict]:
+        """Create a fresh outbound job for an idle courier, or None if none free."""
+        free = [
+            v for v in self.drivers.values()
+            if v["status"] == "available" and not v.get("assigned_delivery")
+            and v["shift_remaining_minutes"] > 0
+        ]
+        if not free:
+            return None
+        drv = self.rng.choice(free)
+
+        taken = {d["destination"] for d in self.deliveries.values()
+                 if d["status"] not in ("Delivered", "Cancelled")}
+        options = [n for n in self.nodes if n != self.hub and n not in taken]
+        if not options:
+            options = [n for n in self.nodes if n != self.hub]
+        dest = self.rng.choice(options)
+
+        # Humanitarian consignments are V-2xx, commercial parcels D-1xx. Using
+        # one hardcoded prefix would drop a "D-105" into a cold-chain fleet.
+        self.delivery_seq += 1
+        prefix, base = ("V", 200) if self.is_humanitarian else ("D", 100)
+        did = f"{prefix}-{base + self.delivery_seq}"
+        recipient, payload, units = self.rng.choice(
+            _HUMANITARIAN_JOBS if self.is_humanitarian else _COMMERCIAL_JOBS
+        )
+        origin = self.hub
+        # A new job starts at the depot, so the courier is dispatched from there.
+        drv["at"] = coord(origin)
+        drv["located_at"] = origin
+        drv["status"] = "on_route"
+        drv["assigned_delivery"] = did
+        drv["active_load"] = min(drv["capacity"], drv["active_load"] + 1)
+
+        d = {
+            "id": did,
+            "driver_id": drv["id"],
+            "original_driver_id": drv["id"],
+            "recipient": recipient,
+            "origin": origin,
+            "destination": dest,
+            "zone": dest,
+            "status": "On Route",
+            "progress": 0.0,
+            "payload": payload,
+            "payload_units": units,
+            "cold_chain": self.is_humanitarian,
+            "address_confidence": round(self.rng.uniform(0.70, 0.97), 2),
+            "recipient_absence_rate": round(self.rng.uniform(0.05, 0.22), 2),
+            # Set once the ETA is known, just below — the promise has to scale
+            # with the journey, or a cross-city run is "late" the moment it
+            # leaves the depot.
+            "slack_minutes": 0.0,
+            "telemetry": {
+                "traffic_index": round(self.rng.uniform(0.30, 0.60), 2),
+                "weather_risk": round(self.rng.uniform(0.08, 0.22), 2),
+            },
+            "incidents": [],
+            "reroute": None,
+            "handover_at": None,
+            "handover": None,
+        }
+        if d["cold_chain"]:
+            d["doses"] = int(self.rng.choice([120, 240, 300, 480]))
+            d["cold_minutes_remaining"] = round(self.rng.uniform(95.0, 165.0), 1)
+        else:
+            d["doses"] = 0
+            d["cold_minutes_remaining"] = 0.0
+        self.deliveries[did] = d
+        self._recompute_eta(d)
+        # The promised window is the expected journey plus a commercial buffer,
+        # so slack starts positive and proportional rather than flat.
+        d["promised_minutes"] = round(d["eta_minutes"] * self.rng.uniform(1.25, 1.6), 1)
+        d["slack_minutes"] = round(d["promised_minutes"] - d["eta_minutes"], 1)
+        return d
 
     def _walk(self, value: float, step: float, lo: float, hi: float, center: float) -> float:
         nudge = self.rng.uniform(-step, step)

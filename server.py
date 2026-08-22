@@ -102,6 +102,8 @@ class Engine:
         status = self.world.deliveries[delivery_id]["status"]
         if status == "Resolving":
             return {"ok": False, "error": f"{delivery_id} is already being resolved"}
+        if status in ("Delivered", "Cancelled"):
+            return {"ok": False, "error": f"{delivery_id} is already {status.lower()}"}
         self.incidents.put((delivery_id, disruption_key, trigger))
         depth = self.incidents.qsize()
         if depth > 1 or self._chain_active.is_set():

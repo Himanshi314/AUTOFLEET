@@ -218,7 +218,7 @@ const CHIP = {
   'On Route': 'chip-onroute', 'Resolving': 'chip-resolving',
   'Reassigned': 'chip-reassigned', 'Rerouted': 'chip-rerouted',
   'Rescheduled': 'chip-rescheduled', 'Escalated': 'chip-escalated',
-  'Awaiting Driver': 'chip-awaiting',
+  'Awaiting Driver': 'chip-awaiting', 'Delivered': 'chip-delivered',
 };
 
 /* A disruption can only be raised where somebody can actually observe it.
@@ -443,6 +443,7 @@ function renderCourier() {
     on_route: ['chip-onroute', 'On route'],
     available: ['chip-reassigned', 'Available'],
     unavailable: ['chip-escalated', 'Unavailable'],
+    off_shift: ['chip-awaiting', 'Shift ended · resting'],
   }[drv.status] || ['chip-onroute', drv.status];
 
   const roster = st.drivers.map((d) => {
@@ -500,7 +501,8 @@ function renderCourier() {
      the demo tell the truth — the rider reports, the chain resolves, ops watches
      it happen. Disabled with a reason when there is nothing to report against. */
   const reportable = disruptionsForMode('courier');
-  const canReport = !!job && drv.status !== 'unavailable';
+  const canReport = !!job && drv.status !== 'unavailable'
+    && job.status !== 'Delivered' && job.status !== 'Resolving';
   const reportPanel = `
     <div class="cr-report">
       <div class="cr-report-h">
