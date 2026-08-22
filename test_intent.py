@@ -459,5 +459,158 @@ class EscalationLifecycleTests(unittest.TestCase):
         self.assertIn("awaiting_decision_since", d)
 
 
+# ==========================================================================
+# The human decision surface
+# ==========================================================================
+
+class DecisionSurfaceTests(unittest.TestCase):
+    """An escalation that a person cannot act on is just a stuck delivery, so
+    the options offered have to be real, derived from state, and recorded."""
+
+    def _escalated(self, disruption="wrong_address"):
+        from autofleet.world import World
+        from autofleet.llm import LLM
+        from autofleet.agents import run_chain
+        w = World()
+        for i in w.intents.for_delivery("D-101"):
+            if i.kind == "delivery_deadline":
+                i.params["by_minutes"] = w.clock_minutes - 1.0
+                i.hardness = "hard"
+        run_chain(w, LLM(), delivery_id="D-101", disruption_key=disruption,
+                  trigger="test", emit=lambda e: None)
+        return w
+
+    def test_a_pending_decision_carries_the_conflict_and_its_arithmetic(self):
+        w = self._escalated()
+        pend = w.pending_decisions()
+        self.assertEqual(len(pend), 1)
+        d = pend[0]
+        self.assertTrue(d["reason"])
+        self.assertTrue(d["blocking"])
+        self.assertIn("evidence", d["blocking"][0])
+        self.assertIn("timeout_ticks", d)
+
+    def test_options_are_derived_from_state_not_a_fixed_menu(self):
+        """A courier who cannot carry it must not be offered as an option."""
+        able = [o["action"] for o in
+                self._escalated("wrong_address").pending_decisions()[0]["options"]]
+        disabled = [o["action"] for o in
+                    self._escalated("bike_breakdown").pending_decisions()[0]["options"]]
+        self.assertIn("retain_original", able)
+        self.assertNotIn("retain_original", disabled,
+                         "a rider whose bike is broken cannot keep the job")
+
+    def test_override_withdraws_that_intent_and_asks_for_a_re_decision(self):
+        w = self._escalated()
+        opt = next(o for o in w.pending_decisions()[0]["options"]
+                   if o["action"] == "override_intent")
+        out = w.apply_decision(delivery_id="D-101", action="override_intent",
+                               intent_id=opt["intent_id"], actor="ops:test")
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["requeue"], "the chain must decide again, not be overruled")
+        self.assertFalse(w.intents.get(opt["intent_id"]).active)
+
+    def test_retain_puts_the_original_courier_back_on_the_job(self):
+        w = self._escalated()
+        original = w.deliveries["D-101"]["original_driver_id"]
+        out = w.apply_decision(delivery_id="D-101", action="retain_original",
+                               actor="ops:test")
+        self.assertTrue(out["ok"])
+        self.assertFalse(out["requeue"], "this decision IS the outcome")
+        d = w.deliveries["D-101"]
+        self.assertEqual(d["status"], "On Route")
+        self.assertEqual(d["driver_id"], original)
+
+    def test_reschedule_moves_the_promise_and_re_decides(self):
+        w = self._escalated()
+        from autofleet.world import RESCHEDULE_MINUTES
+        before = w.deliveries["D-101"]["promised_minutes"]
+        out = w.apply_decision(delivery_id="D-101", action="reschedule",
+                               actor="ops:test")
+        self.assertTrue(out["requeue"])
+        self.assertAlmostEqual(w.deliveries["D-101"]["promised_minutes"],
+                               before + RESCHEDULE_MINUTES, places=1)
+
+    def test_cancel_stops_the_delivery_and_frees_the_courier(self):
+        w = self._escalated()
+        original = w.drivers[w.deliveries["D-101"]["original_driver_id"]]
+        w.apply_decision(delivery_id="D-101", action="cancel", actor="ops:test")
+        self.assertEqual(w.deliveries["D-101"]["status"], "Cancelled")
+        self.assertIsNone(original["assigned_delivery"])
+
+    def test_every_decision_is_attributed_and_timestamped(self):
+        w = self._escalated()
+        w.apply_decision(delivery_id="D-101", action="cancel",
+                         actor="ops:himanshi", note="recipient unreachable")
+        self.assertEqual(len(w.decisions), 1)
+        rec = w.decisions[0]
+        for field in ("actor", "clock", "tick", "action", "outcome", "note"):
+            self.assertIn(field, rec)
+        self.assertEqual(rec["actor"], "ops:himanshi")
+        self.assertEqual(rec["note"], "recipient unreachable")
+
+    def test_an_override_records_which_intent_was_set_aside(self):
+        w = self._escalated()
+        opt = next(o for o in w.pending_decisions()[0]["options"]
+                   if o["action"] == "override_intent")
+        w.apply_decision(delivery_id="D-101", action="override_intent",
+                         intent_id=opt["intent_id"], actor="ops:test")
+        self.assertTrue(w.decisions[0]["intent_statement"],
+                        "the withdrawn goal must be named, not just its id")
+
+    def test_bad_input_is_refused(self):
+        w = self._escalated()
+        self.assertFalse(w.apply_decision(delivery_id="D-999", action="cancel")["ok"])
+        self.assertFalse(w.apply_decision(delivery_id="D-101", action="nope")["ok"])
+        self.assertFalse(w.apply_decision(delivery_id="D-101",
+                                          action="override_intent",
+                                          intent_id="INT-999")["ok"])
+
+    def test_a_delivery_cannot_be_decided_twice(self):
+        w = self._escalated()
+        self.assertTrue(w.apply_decision(delivery_id="D-101", action="cancel")["ok"])
+        again = w.apply_decision(delivery_id="D-101", action="cancel")
+        self.assertFalse(again["ok"])
+        self.assertEqual(len(w.decisions), 1)
+
+
+class IntentLifecycleTests(unittest.TestCase):
+    """The register has to track the fleet. Left alone it went stale within
+    minutes: every intent pointed at a retired delivery and every delivery on
+    the board had none, so the conflict check silently stopped applying."""
+
+    def _run(self, mode="commercial", ticks=300):
+        from autofleet.world import World
+        w = World(mode=mode)
+        for _ in range(ticks):
+            w.drift()
+        return w
+
+    def test_no_intent_outlives_its_delivery(self):
+        w = self._run()
+        live = set(w.deliveries)
+        stale = [i.scope for i in w.intents.all()
+                 if i.scope != "*" and i.scope not in w.drivers
+                 and i.scope not in live]
+        self.assertEqual(stale, [], "delivery-scoped intents must be pruned")
+
+    def test_every_live_delivery_has_a_stated_intent(self):
+        for mode in ("commercial", "humanitarian"):
+            w = self._run(mode)
+            uncovered = [
+                d["id"] for d in w.deliveries.values()
+                if d["status"] not in ("Delivered", "Cancelled")
+                and not any(i.scope == d["id"] for i in w.intents.all())
+            ]
+            self.assertEqual(uncovered, [], f"{mode}: new work arrived with no goals")
+
+    def test_fleet_wide_and_courier_intents_survive(self):
+        w = self._run()
+        scopes = [i.scope for i in w.intents.all()]
+        self.assertIn("*", scopes)
+        self.assertTrue(any(s in w.drivers for s in scopes),
+                        "a courier's own intent must not be pruned")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

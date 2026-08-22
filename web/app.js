@@ -179,6 +179,85 @@ const HOLDER_ICON = {
   operations: '\u{1F3E2}', payload: '\u{1F4E6}',
 };
 
+/* ---- Decisions awaiting a person -------------------------------------- */
+/* The system has declined to commit and is asking. This panel states what it
+   would have done, whose stated goals collided and with what arithmetic, and
+   the options genuinely open — derived from state, so "keep the original
+   courier" simply is not offered when that courier's bike is broken. */
+function renderDecisions(payload) {
+  if (!payload) return;
+  App.decisions = payload;
+  const host = document.getElementById('decisions');
+  if (!host) return;
+  const pending = payload.pending || [];
+  host.hidden = pending.length === 0 && !(payload.history || []).length;
+  if (host.hidden) { host.innerHTML = ''; return; }
+
+  const cards = pending.map(d => {
+    const why = (d.blocking || []).map(v => {
+      const e = v.evidence || {};
+      const nums = Object.keys(e)
+        .filter(k => k !== 'basis')
+        .map(k => `<span class="dc-n"><i>${esc(k.replace(/_/g, ' '))}</i>${esc(String(e[k]))}</span>`)
+        .join('');
+      return `<div class="dc-conflict">
+          <div class="dc-say">${esc(v.holder)} &mdash; &ldquo;${esc(v.statement)}&rdquo;</div>
+          <div class="dc-nums">${nums}</div>
+        </div>`;
+    }).join('');
+    const opts = (d.options || []).map(o => `
+      <button class="dc-opt${o.destructive ? ' danger' : ''}"
+              data-delivery="${esc(d.delivery_id)}"
+              data-action="${esc(o.action)}"
+              data-intent="${esc(o.intent_id || '')}">
+        <span class="dc-o-label">${esc(o.label)}</span>
+        <span class="dc-o-detail">${esc(o.detail || '')}</span>
+        ${o.cost ? `<span class="dc-o-cost">cost &middot; ${esc(o.cost)}</span>` : ''}
+      </button>`).join('');
+    const left = Math.max(0, (d.timeout_ticks || 0) - (d.waited_ticks || 0));
+    return `<article class="dcard-wait">
+        <header class="dw-head">
+          <div>
+            <span class="dw-tag">needs a decision</span>
+            <h3>${esc(d.delivery_id)} &middot; ${esc(d.recipient)}</h3>
+            <p class="dw-sub">${esc(d.payload || '')}${d.destination_name
+                ? ' &rarr; ' + esc(d.destination_name) : ''}</p>
+          </div>
+          <div class="dw-meta mono">
+            <span>waiting since ${esc(d.since || '--:--')}</span>
+            <span class="dw-timeout">${left} ticks before it reverts</span>
+          </div>
+        </header>
+        <p class="dw-reason">${esc(d.reason || '')}</p>
+        ${why ? `<div class="dw-why">${why}</div>` : ''}
+        <div class="dw-opts">${opts}</div>
+      </article>`;
+  }).join('');
+
+  const hist = (payload.history || []).slice(0, 6).map(h => `
+    <li><span class="mono">${esc(h.clock || '')}</span>
+        <b>${esc(h.actor || '')}</b> ${esc(h.outcome || h.action || '')}
+        ${h.note ? `<i>&ldquo;${esc(h.note)}&rdquo;</i>` : ''}</li>`).join('');
+
+  host.innerHTML =
+    (pending.length
+      ? `<div class="dw-list">${cards}</div>`
+      : '') +
+    (hist
+      ? `<div class="dw-trail">
+           <h4>Decisions taken</h4>
+           <ul>${hist}</ul>
+         </div>`
+      : '');
+}
+
+function refreshDecisions() {
+  fetch('/api/decisions')
+    .then(r => r.json())
+    .then(renderDecisions)
+    .catch(() => {});
+}
+
 function renderIntents(payload) {
   if (!payload) return;
   App.intents = payload.intents || [];
@@ -325,6 +404,7 @@ function renderFleet() {
            <div class="dc-pay">${esc(d.payload)}</div>
          </div>
          <span class="chip ${CHIP[d.status] || 'chip-onroute'}">${esc(d.status)}</span>
+         \${d.difficult ? '<span class="chip chip-difficult" title="Low geocode confidence, recipient often out, or a congested corridor - this one is likely to conflict">tricky</span>' : ''}
        </div>
        <div class="dc-rows">
          <div class="dc-row"><span class="k">Carrier</span><span class="v">${
@@ -1523,6 +1603,7 @@ function renderAll(bumpImpact) {
   renderControls();
   renderImpact(App.state.impact, bumpImpact);
   refreshIntents();
+  refreshDecisions();
   renderFleet();
   renderRisk();
   if (App.view === 'courier') {
@@ -1602,6 +1683,8 @@ function handle(ev) {
     case 'intent_check':     intentCheckCard(ev); break;
     case 'intent_gate':      intentGateCard(ev); break;
     case 'intents':          renderIntents(ev); break;
+    case 'decisions':        renderDecisions(ev); break;
+    case 'decision':         refreshDecisions(); break;
     case 'agent_start':      agentStart(ev); break;
     case 'agent_delta':      agentDelta(ev); break;
     case 'agent_done':       agentDone(ev); break;
@@ -1616,7 +1699,7 @@ function handle(ev) {
       break;
 
     case 'resolved':         resolvedCard(ev); break;
-    case 'escalated':        escalatedCard(ev); break;
+    case 'escalated':        escalatedCard(ev); refreshDecisions(); break;
     case 'aborted':          abortedCard(ev); break;
 
     case 'degraded':
@@ -1681,4 +1764,34 @@ document.getElementById('intents').addEventListener('click', (e) => {
     .then(r => r.json())
     .then(() => refreshIntents())
     .catch(() => { btn.disabled = false; });
+});
+
+/* Applying a decision. The button carries the action and, for an override, the
+   specific intent being withdrawn — so the request says exactly which stated
+   goal a person chose to set aside, and the audit trail can name it. */
+document.getElementById('decisions').addEventListener('click', (e) => {
+  const btn = e.target.closest('.dc-opt');
+  if (!btn) return;
+  const payload = {
+    delivery_id: btn.dataset.delivery,
+    action: btn.dataset.action,
+    intent_id: btn.dataset.intent || '',
+    actor: 'operations desk',
+  };
+  if (btn.classList.contains('danger') &&
+      !window.confirm('Cancel ' + payload.delivery_id +
+                      '? Nothing will be delivered today.')) {
+    return;
+  }
+  [...document.querySelectorAll('.dc-opt')].forEach(b => { b.disabled = true; });
+  fetch('/api/decisions/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+    .then(r => r.json())
+    .then(() => { refreshDecisions(); refreshIntents(); })
+    .catch(() => {
+      [...document.querySelectorAll('.dc-opt')].forEach(b => { b.disabled = false; });
+    });
 });

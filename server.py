@@ -196,6 +196,57 @@ class Engine:
         })
         return {"ok": True, "enabled": self.autonomous}
 
+    def decisions_payload(self) -> Dict:
+        """Escalations awaiting a person, and every decision already taken."""
+        return {
+            "clock": self.world.clock,
+            "pending": self.world.pending_decisions(),
+            "history": list(reversed(self.world.decisions[-20:])),
+        }
+
+    def resolve_decision(self, *, delivery_id: str, action: str,
+                         intent_id: str = "", actor: str = "operations",
+                         note: str = "") -> Dict:
+        """Apply one human decision to an escalated delivery.
+
+        Two of the four actions change the INPUTS rather than dictating the
+        outcome — withdrawing an intent, or moving the promised window — so the
+        chain is re-run and decides again with the new facts. A person removing a
+        constraint is not the same as a person choosing the courier, and the
+        distinction is worth preserving: the audit trail then shows what the
+        human changed, and separately what the system did about it.
+        """
+        out = self.world.apply_decision(
+            delivery_id=delivery_id, action=action, intent_id=intent_id,
+            actor=actor, note=note,
+        )
+        if not out.get("ok"):
+            return out
+
+        decision = out["decision"]
+        self.bus.publish({"type": "decision", **decision})
+        self.bus.publish({
+            "type": "log",
+            "level": "warn" if action in ("cancel", "override_intent") else "ok",
+            "msg": "human decision · " + str(decision.get("outcome", action)),
+        })
+        self.bus.publish({"type": "state", "state": self.world.snapshot()})
+        self.bus.publish({"type": "intents", **self.intents_payload()})
+        self.bus.publish({"type": "decisions", **self.decisions_payload()})
+
+        if out.get("requeue") and out.get("disruption_key"):
+            queued = self.enqueue(
+                delivery_id, out["disruption_key"], trigger="human-decision",
+            )
+            out["requeued"] = queued.get("ok", False)
+            if not queued.get("ok"):
+                self.bus.publish({
+                    "type": "log", "level": "error",
+                    "msg": "could not re-run " + delivery_id + " after the "
+                           "decision: " + str(queued.get("error")),
+                })
+        return out
+
     def intents_payload(self) -> Dict:
         """The whole intent register, plus the clock its deadlines are read against."""
         return {
@@ -479,6 +530,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "forbidden"}, 403)
                     return
                 self._file(target)
+            elif route == "/api/decisions":
+                self._json(ENGINE.decisions_payload())
             elif route == "/api/intents":
                 self._json(ENGINE.intents_payload())
             elif route == "/api/state":
@@ -506,6 +559,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result, 200 if result.get("ok") else 400)
             elif route == "/api/autonomous":
                 self._json(ENGINE.set_autonomous(body.get("enabled", False)))
+            elif route == "/api/decisions/resolve":
+                result = ENGINE.resolve_decision(
+                    delivery_id=str(body.get("delivery_id", "")),
+                    action=str(body.get("action", "")),
+                    intent_id=str(body.get("intent_id", "")),
+                    actor=str(body.get("actor", "operations")),
+                    note=str(body.get("note", "")),
+                )
+                self._json(result, 200 if result.get("ok") else 400)
             elif route == "/api/intents/toggle":
                 result = ENGINE.set_intent_active(
                     str(body.get("id", "")), bool(body.get("active", True)),

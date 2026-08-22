@@ -1282,3 +1282,87 @@ body {
   font-size: 11px; color: var(--ink-2); padding-top: 5px;
   border-top: 1px dashed var(--border);
 }
+
+
+/* ---- Decisions awaiting a person -------------------------------------- */
+.decisions { margin: 0 18px 12px; }
+.dw-list { display: flex; flex-direction: column; gap: 10px; }
+.dcard-wait {
+  padding: 14px 16px; border-radius: var(--r-lg);
+  background: #fffdf7; border: 1px solid #f0d9a8;
+  border-left: 4px solid var(--st-escalated);
+}
+.dw-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.dw-tag {
+  display: inline-block; font-size: 8.5px; font-weight: 800;
+  letter-spacing: .09em; text-transform: uppercase;
+  color: #92400e; background: #fef3c7; padding: 2px 7px; border-radius: 4px;
+}
+.dw-head h3 { font-size: 15px; font-weight: 800; color: var(--primary); margin-top: 4px; }
+.dw-sub { font-size: 11px; color: var(--ink-3); }
+.dw-meta {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  font-size: 9.5px; color: var(--ink-3); text-align: right;
+}
+.dw-timeout { color: #92400e; }
+.dw-reason { font-size: 12px; color: var(--ink-2); margin: 9px 0 8px; line-height: 1.45; }
+
+.dw-why { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.dc-conflict {
+  padding: 8px 10px; border-radius: 7px;
+  background: #fff; border: 1px solid var(--border);
+}
+.dc-say { font-size: 11.5px; font-weight: 700; color: var(--primary); }
+.dc-nums { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.dc-n {
+  font-family: var(--font-mono); font-size: 9px; background: #f7f9f8;
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+  color: var(--ink-2);
+}
+.dc-n i { color: var(--ink-3); font-style: normal; margin-right: 4px; }
+
+.dw-opts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+.dc-opt {
+  display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 9px 11px; border-radius: 8px; cursor: pointer;
+  background: #fff; border: 1px solid var(--border);
+  transition: border-color .12s ease, background .12s ease;
+}
+.dc-opt:hover:not(:disabled) { border-color: var(--accent-dark); background: #f6fbf8; }
+.dc-opt:disabled { opacity: .5; cursor: progress; }
+.dc-opt.danger { border-color: #f3c4c4; }
+.dc-opt.danger:hover:not(:disabled) { border-color: #dc2626; background: #fef6f6; }
+.dc-o-label { font-size: 11.5px; font-weight: 800; color: var(--primary); }
+.dc-opt.danger .dc-o-label { color: #b91c1c; }
+.dc-o-detail { font-size: 10.5px; color: var(--ink-3); line-height: 1.35; }
+.dc-o-cost {
+  font-size: 9px; color: #92400e; font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+.dw-trail {
+  margin-top: 10px; padding: 10px 14px; border-radius: var(--r-md);
+  background: var(--bg-card); border: 1px solid var(--border);
+}
+.dw-trail h4 {
+  font-size: 10px; font-weight: 800; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px;
+}
+.dw-trail ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.dw-trail li { font-size: 11px; color: var(--ink-2); line-height: 1.4; }
+.dw-trail li span { color: var(--ink-3); margin-right: 6px; font-size: 9.5px; }
+.dw-trail li i { color: var(--ink-3); }
+
+/* A delivery the sim flagged as inherently awkward: poor geocode, a recipient
+   often out, or a corridor already bad. Shown so an operator knows why the risk
+   score is high before anyone explains it. */
+.chip-difficult {
+  background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
+  margin-left: 5px;
+}

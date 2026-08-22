@@ -57,6 +57,9 @@ FLEET_TARGET = 4
 # dispatcher queue has a timeout, and so does this one.
 ESCALATION_TIMEOUT_TICKS = 90        # ~3.3 min of real time
 
+# How far a human "extend the window" decision pushes the promise out.
+RESCHEDULE_MINUTES = 45.0
+
 # Shift length and the rest between shifts, in simulated minutes / ticks.
 SHIFT_MINUTES = 210
 REST_TICKS = 25
@@ -456,6 +459,9 @@ class World:
         # _seed_intents(); editable at runtime so the check can be demonstrated
         # to change a decision rather than just described.
         self.intents = IntentRegister()
+        # Every decision a person took on an escalation, with who, when and why.
+        # An override that leaves no trace is worse than no override at all.
+        self.decisions: List[Dict] = []
         self.incident_seq = 0
         self.mode = mode
         self.tick = 0
@@ -729,6 +735,7 @@ class World:
             d["escalated_tick"] = self.tick
             d["escalation_reason"] = reason
             d["escalation_incident"] = incident_id
+            d["escalation_disruption"] = disruption_key
             d["escalation_blocking"] = blocking or []
             d["awaiting_decision_since"] = self.clock
 
@@ -782,7 +789,221 @@ class World:
                 d.pop(key, None)
         return closed
 
-    def _rest_driver(self, drv: Dict) -> None:
+    # -- human decisions on escalations -------------------------------------
+
+    def pending_decisions(self):
+        """Escalations waiting on a person, each with the options actually open.
+
+        The options are derived from the conflict, not a fixed menu: you can only
+        override an intent that is genuinely blocking, and you can only hand the
+        job back to a courier who can still carry it.
+        """
+        out = []
+        with self.lock:
+            for d in self.deliveries.values():
+                if d["status"] != "Escalated":
+                    continue
+                blocking = d.get("escalation_blocking") or []
+                original = self.drivers.get(d.get("original_driver_id") or "")
+                can_retain = bool(
+                    original and original["status"] in ("available", "on_route")
+                )
+                options = []
+                for v in blocking:
+                    intent = self.intents.get(v.get("intent_id", ""))
+                    if intent is None or not intent.active:
+                        continue
+                    options.append({
+                        "action": "override_intent",
+                        "intent_id": intent.id,
+                        "label": "Override " + intent.holder + "'s intent",
+                        "detail": intent.statement,
+                        "cost": v.get("hint", ""),
+                        "destructive": False,
+                    })
+                if can_retain:
+                    options.append({
+                        "action": "retain_original",
+                        "label": "Keep " + original["name"] + " on the job",
+                        "detail": "Accept the delay and leave the delivery with "
+                                  "the courier who already has it.",
+                        "cost": "the stated intent is breached, on the record",
+                        "destructive": False,
+                    })
+                options.append({
+                    "action": "reschedule",
+                    "label": "Extend the promised window",
+                    "detail": "Push the promise out by %.0f minutes and let the "
+                              "system decide again." % RESCHEDULE_MINUTES,
+                    "cost": "recipient is told the window moved",
+                    "destructive": False,
+                })
+                options.append({
+                    "action": "cancel",
+                    "label": "Cancel the delivery",
+                    "detail": "Nothing is delivered today.",
+                    "cost": "the payload does not arrive",
+                    "destructive": True,
+                })
+                out.append({
+                    "delivery_id": d["id"],
+                    "incident_id": d.get("escalation_incident"),
+                    "recipient": d["recipient"],
+                    "payload": d["payload"],
+                    "destination_name": d.get("destination_name"),
+                    "reason": d.get("escalation_reason", ""),
+                    "blocking": blocking,
+                    "since": d.get("awaiting_decision_since"),
+                    "waited_ticks": self.tick - d.get("escalated_tick", self.tick),
+                    "timeout_ticks": ESCALATION_TIMEOUT_TICKS,
+                    "options": options,
+                })
+        return out
+
+    def apply_decision(self, *, delivery_id, action, intent_id="",
+                       actor="operations", note=""):
+        """Record and apply one human decision on an escalated delivery.
+
+        Returns `requeue` when the decision changes the INPUTS rather than
+        imposing an outcome. Overriding an intent, or moving the promise, means
+        the chain should decide again with the new facts — a person withdrawing a
+        constraint is not the same as a person picking the courier.
+        """
+        with self.lock:
+            d = self.deliveries.get(delivery_id)
+            if d is None:
+                return {"ok": False, "error": "unknown delivery " + str(delivery_id)}
+            if d["status"] != "Escalated":
+                return {"ok": False,
+                        "error": str(delivery_id) + " is not awaiting a decision"}
+
+            record = {
+                "delivery_id": delivery_id,
+                "incident_id": d.get("escalation_incident"),
+                "action": action,
+                "actor": actor,
+                "clock": self.clock,
+                "tick": self.tick,
+                "note": note,
+                "intent_id": intent_id or None,
+                "intent_statement": None,
+            }
+            requeue = False
+            original = self.drivers.get(d.get("original_driver_id") or "")
+
+            if action == "override_intent":
+                intent = self.intents.get(intent_id)
+                if intent is None:
+                    return {"ok": False, "error": "unknown intent " + str(intent_id)}
+                intent.active = False
+                record["intent_statement"] = intent.statement
+                record["outcome"] = (
+                    actor + " overrode " + intent.holder + "'s stated intent; "
+                    "the system re-decided with it withdrawn"
+                )
+                requeue = True
+
+            elif action == "retain_original":
+                if not original or original["status"] not in ("available", "on_route"):
+                    return {"ok": False,
+                            "error": "the original courier can no longer carry it"}
+                original["status"] = "on_route"
+                original["assigned_delivery"] = delivery_id
+                d["driver_id"] = original["id"]
+                d["status"] = "On Route"
+                self._recompute_eta(d)
+                record["outcome"] = (
+                    actor + " kept " + original["name"] + " on the job and "
+                    "accepted the breach"
+                )
+
+            elif action == "reschedule":
+                d["promised_minutes"] = round(
+                    float(d.get("promised_minutes") or 0.0) + RESCHEDULE_MINUTES, 1
+                )
+                d["slack_minutes"] = round(
+                    max(0.0, d["promised_minutes"] - d["eta_minutes"]), 1
+                )
+                record["outcome"] = (
+                    actor + " extended the promised window by %.0f min; the "
+                    "system re-decided" % RESCHEDULE_MINUTES
+                )
+                requeue = True
+
+            elif action == "cancel":
+                d["status"] = "Cancelled"
+                d["delivered_tick"] = self.tick
+                if original and original.get("assigned_delivery") == delivery_id:
+                    original["assigned_delivery"] = None
+                    original["active_load"] = max(0, original["active_load"] - 1)
+                    if original["status"] != "unavailable":
+                        original["status"] = "available"
+                record["outcome"] = actor + " cancelled the delivery"
+
+            else:
+                return {"ok": False, "error": "unknown action " + str(action)}
+
+            for key in ("escalated_tick", "awaiting_decision_since"):
+                d.pop(key, None)
+            self.decisions.append(record)
+            return {
+                "ok": True, "decision": record, "requeue": requeue,
+                "disruption_key": d.get("escalation_disruption"),
+            }
+
+    def _add_intent_for(self, d):
+        """Give a newly dispatched delivery the intent its recipient stated.
+
+        Without this the register went stale within minutes: every seeded intent
+        pointed at a delivery that had already been completed and retired, and
+        every delivery actually on the board had no stated intent at all — so
+        the conflict check quietly stopped applying to anything. New work has to
+        arrive with its goals attached.
+
+        A difficult job gets a tight cutoff and a routine one a comfortable
+        cutoff, both measured from the journey it actually faces. That is what
+        keeps conflicts occurring naturally instead of being staged.
+        """
+        if self.is_humanitarian:
+            self.intents.add(
+                holder=d["recipient"], holder_type="payload", kind="cold_window",
+                statement="We need 20 minutes to receive a consignment and get "
+                          "it into the cold room.",
+                params={"handling_margin_minutes": 20.0},
+                hardness="hard", scope=d["id"], declared="consignment manifest",
+            )
+            return
+        eta = float(d.get("eta_minutes") or 20.0)
+        if d.get("difficult"):
+            head = self.rng.uniform(1.02, 1.25) * eta      # barely achievable
+        else:
+            head = self.rng.uniform(1.6, 2.6) * eta        # comfortable
+        cutoff = self.clock_minutes + head
+        # Round to the next quarter hour: people state times, not offsets.
+        cutoff = 15.0 * round(cutoff / 15.0)
+        hh, mm = int(cutoff // 60) % 24, int(cutoff % 60)
+        self.intents.add(
+            holder=d["recipient"], holder_type="recipient",
+            kind="delivery_deadline",
+            statement="Nothing after %02d:%02d - I am out after that." % (hh, mm),
+            params={"by_minutes": cutoff},
+            hardness="hard", scope=d["id"], declared="stated at booking",
+        )
+
+    def _prune_intents(self):
+        """Drop intents scoped to a delivery that no longer exists.
+
+        Called with the lock held. Fleet-wide and courier-scoped intents are
+        untouched; only delivery-scoped ones can go stale.
+        """
+        live = set(self.deliveries)
+        for intent in list(self.intents.all()):
+            scope = intent.scope
+            if scope == "*" or scope in self.drivers or scope in live:
+                continue
+            self.intents.remove(intent.id)
+
+    def _rest_driver(self, drv):
         """End of shift: the courier goes home and a rested one takes over.
 
         Without this, fatigue and vehicle wear only ever went up. Three of the
@@ -887,6 +1108,11 @@ class World:
         # An escalated delivery is waiting on a person, not on the fleet, so it
         # must not count against the target — otherwise four escalations mean no
         # new work is ever dispatched and the board stops moving.
+        self._prune_intents()
+
+        # An escalated delivery is waiting on a person, not on the fleet, so it
+        # must not count against the target - otherwise four escalations mean no
+        # new work is ever dispatched and the board stops moving.
         active = [d for d in self.deliveries.values()
                   if d["status"] not in ("Delivered", "Cancelled", "Escalated")]
         while len(active) < FLEET_TARGET:
@@ -981,6 +1207,7 @@ class World:
         # so slack starts positive and proportional rather than flat.
         d["promised_minutes"] = round(d["eta_minutes"] * self.rng.uniform(1.25, 1.6), 1)
         d["slack_minutes"] = round(d["promised_minutes"] - d["eta_minutes"], 1)
+        self._add_intent_for(d)
         return d
 
     def _walk(self, value: float, step: float, lo: float, hi: float, center: float) -> float:
@@ -1032,6 +1259,10 @@ class World:
                         "address_confidence": d["address_confidence"],
                         "risk": risk["risk"],
                         "risk_band": risk["band"],
+                        # Surfaced so an operator can see WHY a delivery looks
+                        # bad, and so a demo can be pointed at a job that will
+                        # genuinely produce a conflict rather than hunting.
+                        "difficult": bool(d.get("difficult")),
                         "risk_top_driver": risk["top_driver"],
                         "risk_contributions": risk["contributions"][:4],
                         "incidents": d["incidents"],
