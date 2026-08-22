@@ -98,8 +98,13 @@ body {
 .app { height: 100%; display: flex; flex-direction: column; }
 
 /* flex-shrink defaults to 1, so these must opt out explicitly or they get
-   squeezed to nothing when the content below is tall. */
-.topbar, .impact-strip, .decisions, .intents, .courier, .logbar { flex: 0 0 auto; }
+   squeezed to nothing when the content below is tall.
+   NOT .courier: each view has exactly one scrolling main region — .grid in
+   operations, .courier in the courier view — and that one has to flex and own
+   its own overflow. Pinning .courier to its content height made it 1009px tall
+   inside a viewport-height column, so the bottom was clipped with no scrollbar
+   to reach it. */
+.topbar, .impact-strip, .decisions, .intents, .logbar { flex: 0 0 auto; }
 .mono { font-family: var(--font-mono); }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -914,7 +919,9 @@ body {
 .app.view-courier .decisions,
 .app.view-courier .impact-strip { display: none; }
 .app.view-courier .courier {
-  display: block; overflow-y: auto; min-height: 0;
+  /* The main region for this view: takes the leftover height and scrolls
+     inside itself, exactly as .grid does in operations. */
+  display: block; flex: 1 1 auto; overflow-y: auto; min-height: 0;
   padding: 16px 20px 18px; background: var(--bg-page);
 }
 
