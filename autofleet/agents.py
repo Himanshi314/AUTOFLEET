@@ -467,6 +467,48 @@ _NUM_RE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?)\s*(%?)")
 _PROSE_INT_CEILING = 3
 
 
+def _action_for(candidate: Dict, *, delivery_id: str, incumbent_id: str) -> Dict:
+    """The concrete action assigning this delivery to this candidate would be.
+
+    Built from the candidate's own computed figures so the conflict check and
+    the reassignment it is checking cannot disagree about the ETA.
+    """
+    return {
+        "kind": "retain" if candidate["driver_id"] == incumbent_id else "reassign",
+        "delivery_id": delivery_id,
+        "driver_id": candidate["driver_id"],
+        "driver_name": candidate["name"],
+        "eta_minutes": candidate["eta_minutes"],
+        # What the courier is being asked to commit to: approach plus the run.
+        "journey_minutes": candidate["eta_minutes"],
+        "approach_km": candidate["distance_km"],
+    }
+
+
+def _screen_candidates(world, ranking: Dict, *, delivery_id: str,
+                       incumbent_id: str, limit: int = 5) -> List[Dict]:
+    """Check every option against stated intents BEFORE anything is proposed.
+
+    Screening the whole shortlist rather than only the eventual pick is what
+    makes this early rather than a veto at the end: the Resource agent is handed
+    the conflicts along with the candidates, so it can choose around them and
+    explain why. The final commit is still re-checked — see the gate — because a
+    model given the option to ignore a constraint sometimes takes it.
+    """
+    delivery = world.deliveries[delivery_id]
+    screened = []
+    for candidate in ranking["candidates"][:limit]:
+        action = _action_for(candidate, delivery_id=delivery_id,
+                             incumbent_id=incumbent_id)
+        check = world.intents.check(action=action, ctx={
+            "clock_minutes": world.clock_minutes,
+            "driver": world.drivers[candidate["driver_id"]],
+            "delivery": delivery,
+        })
+        screened.append({"candidate": candidate, "action": action, "check": check})
+    return screened
+
+
 def _candidates_for_prompt(candidates: List[Dict]) -> List[Dict]:
     """Trim the ranking payload before it goes into a prompt.
 
@@ -857,6 +899,57 @@ def run_chain(
     # 4 — Resource (route alternates + ranked candidates)
     if stale():
         return abort("resource")
+
+    # ---- Intent conflict check, before anything is proposed ---------------
+    screened = _screen_candidates(
+        world, ranking, delivery_id=delivery_id, incumbent_id=incumbent_id,
+    )
+    clear_ids = [s["candidate"]["driver_id"] for s in screened if s["check"]["clear"]]
+    conflicts_by_driver = {
+        s["candidate"]["driver_id"]: [
+            {
+                "holder": v["holder"], "holder_type": v["holder_type"],
+                "statement": v["statement"], "hardness": v["hardness"],
+                "why": v["hint"], "evidence": v["evidence"],
+            }
+            for v in s["check"]["violations"]
+        ]
+        for s in screened if s["check"]["violations"]
+    }
+    emit({
+        "type": "intent_check",
+        "incident_id": incident_id,
+        "delivery_id": delivery_id,
+        "clock": world.clock,
+        "stage": "pre_proposal",
+        "intents_active": len(world.intents.for_delivery(delivery_id)),
+        "options": [
+            {
+                "driver_id": s["candidate"]["driver_id"],
+                "name": s["candidate"]["name"],
+                "rank": s["candidate"]["rank"],
+                "eta_minutes": s["candidate"]["eta_minutes"],
+                "checked": s["check"]["checked"],
+                "clear": s["check"]["clear"],
+                "results": s["check"]["results"],
+            }
+            for s in screened
+        ],
+        "clear_count": len(clear_ids),
+        "blocked_count": len(screened) - len(clear_ids),
+    })
+    if conflicts_by_driver:
+        top = screened[0]
+        emit({
+            "type": "log",
+            "level": "warn" if not top["check"]["clear"] else "info",
+            "msg": f"{incident_id} · intent check · "
+                   f"{len(screened) - len(clear_ids)}/{len(screened)} options "
+                   f"conflict with a stated intent"
+                   + ("; the top-ranked option is one of them"
+                      if not top["check"]["clear"] else ""),
+        })
+
     resource_text = run_agent(
         "resource",
         extra={
@@ -867,6 +960,13 @@ def run_chain(
                 "candidates": _candidates_for_prompt(ranking["candidates"][:5]),
                 "excluded": ranking["rejected"][:6],
                 "incumbent_driver_id": incumbent_id,
+            },
+            "STATED INTENTS THIS ACTION MUST NOT BREAK": {
+                "note": "Goals declared by the recipient, the courier or "
+                        "operations. A HARD conflict must not be committed; "
+                        "prefer a driver with no conflict and say why.",
+                "driver_ids_with_no_conflict": clear_ids,
+                "conflicts_per_driver": conflicts_by_driver or "none",
             },
             "ROUTE ALTERNATES (minutes are against the disrupted direct path)":
                 alternates,
@@ -904,6 +1004,96 @@ def run_chain(
         # Resource Agent was routed out — the ranker's top pick stands as-is.
         chosen = ranking["candidates"][0]
 
+    # ---- The gate: last check before anything is committed ----------------
+    # The shortlist was screened before proposing, but the proposal is what
+    # actually gets applied, so it is re-checked here. A model handed the option
+    # to override a stated intent will sometimes take it, and this is the point
+    # after which a courier's evening genuinely changes.
+    screened_by_id = {s["candidate"]["driver_id"]: s for s in screened}
+
+    def _gate(candidate: Dict) -> Dict:
+        entry = screened_by_id.get(candidate["driver_id"])
+        if entry is not None:
+            return entry["check"]
+        action = _action_for(candidate, delivery_id=delivery_id,
+                             incumbent_id=incumbent_id)
+        return world.intents.check(action=action, ctx={
+            "clock_minutes": world.clock_minutes,
+            "driver": world.drivers[candidate["driver_id"]],
+            "delivery": world.deliveries[delivery_id],
+        })
+
+    gate = _gate(chosen)
+    substituted_from = None
+    if not gate["clear"]:
+        # Prefer an option that breaks nothing over one that breaks something,
+        # walking the ranking in order so the substitution is still the best
+        # remaining choice rather than an arbitrary one.
+        alternative = next(
+            (s["candidate"] for s in screened
+             if s["check"]["clear"] and s["candidate"]["driver_id"] != chosen["driver_id"]),
+            None,
+        )
+        emit({
+            "type": "intent_gate",
+            "incident_id": incident_id,
+            "delivery_id": delivery_id,
+            "clock": world.clock,
+            "blocked_driver_id": chosen["driver_id"],
+            "blocked_driver_name": chosen["name"],
+            "blocking": gate["blocking"],
+            "resolution": "substituted" if alternative else "escalated",
+            "substitute_driver_id": alternative["driver_id"] if alternative else None,
+            "substitute_driver_name": alternative["name"] if alternative else None,
+        })
+        for v in gate["blocking"]:
+            emit({
+                "type": "log", "level": "warn",
+                "msg": f"{incident_id} · BLOCKED before commit · {chosen['name']} "
+                       f"would break {v['holder']}'s stated intent "
+                       f"({v['kind']}) · {v['hint']}",
+            })
+        if alternative is not None:
+            substituted_from = chosen
+            chosen = alternative
+            emit({
+                "type": "log", "level": "ok",
+                "msg": f"{incident_id} · re-selected {chosen['name']} "
+                       f"({chosen['driver_id']}) — the best option that breaks "
+                       f"no stated intent",
+            })
+        else:
+            # Nothing on the shortlist satisfies every stated intent. This is a
+            # genuine conflict between people, not a system failure, and a
+            # person has to choose which goal gives way.
+            reason = (
+                "Every available option breaks a stated intent: "
+                + "; ".join(
+                    f"{v['holder']} — {v['statement']}" for v in gate["blocking"]
+                )
+                + ". A human has to decide which goal gives way."
+            )
+            emit({
+                "type": "log", "level": "error",
+                "msg": f"{incident_id} · no option satisfies every stated intent; "
+                       f"escalating the conflict for a human decision.",
+            })
+            world.deliveries[delivery_id]["status"] = "Escalated"
+            world.ledger.record_escalation(
+                incident_id=incident_id, delivery_id=delivery_id, reason=reason,
+            )
+            emit({"type": "state", "state": world.snapshot()})
+            emit({
+                "type": "escalated", "incident_id": incident_id,
+                "delivery_id": delivery_id, "reason": reason,
+                "rejected": ranking["rejected"],
+                "intent_conflict": True,
+                "blocking": gate["blocking"],
+                "seconds": round(time.perf_counter() - started, 1),
+            })
+            return {"escalated": True, "incident_id": incident_id,
+                    "intent_conflict": True}
+
     emit({
         "type": "selection", "agent": "resource",
         "driver_id": chosen["driver_id"], "driver_name": chosen["name"],
@@ -914,6 +1104,12 @@ def run_chain(
         "decisive_factor": chosen["decisive_factor"],
         "retained": chosen["driver_id"] == incumbent_id,
         "by_model_only": not bool(resource_text),
+        # Set when the pre-commit gate displaced the proposed driver.
+        "intent_substituted_from": (
+            {"driver_id": substituted_from["driver_id"],
+             "name": substituted_from["name"]} if substituted_from else None
+        ),
+        "intent_cleared": _gate(chosen)["checked"],
     })
 
     will_reassign = chosen["driver_id"] != incumbent_id

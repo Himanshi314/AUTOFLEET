@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from .geo import (NODES, ROADS, bounds, coord, nearest_nodes, road_km,
                   travel_minutes)
 from .impact import ImpactLedger, avoided_redelivery_km
+from .intent import IntentRegister
 from .scoring import RISK_MODEL
 
 # Doorstep / handover time added to every ETA, in minutes. ASSUMPTION.
@@ -31,6 +32,15 @@ SIM_MINUTES_PER_TICK = 0.6
 
 # On-road distance at which a courier counts as arrived.
 ARRIVAL_KM = 0.25
+
+# The simulated day starts here (minutes since midnight). Stated intents like
+# "nothing after 18:00" need a wall clock to be checkable, and a wall clock is
+# also far more legible to a reader than "in 43 minutes".
+# 17:20. Deliberately inside the evening peak, which is both when last-mile
+# delivery actually fails and the only time a stated cutoff can bite: starting
+# the day at 15:40 left every 18:00 deadline two hours of slack, so the conflict
+# check had nothing to find until the demo had been running for an hour.
+SIM_START_MINUTES = 17 * 60 + 20
 
 # How long a delivered job stays on the board before being retired, so an
 # operator actually sees it land rather than having rows vanish mid-glance.
@@ -435,6 +445,10 @@ class World:
         self.lock = threading.RLock()
         self.rng = random.Random(seed)
         self.ledger = ImpactLedger()
+        # Stated goals, checked before any commit. Seeded per scenario in
+        # _seed_intents(); editable at runtime so the check can be demonstrated
+        # to change a decision rather than just described.
+        self.intents = IntentRegister()
         self.incident_seq = 0
         self.mode = mode
         self.tick = 0
@@ -457,6 +471,7 @@ class World:
         self.drivers = {d["id"]: d for d in state["drivers"]}
         self.deliveries = {d["id"]: d for d in state["deliveries"]}
         self.delivery_seq = len(state["deliveries"])
+        self._seed_intents()
         self.completed = 0
         for d in self.deliveries.values():
             drv = self.drivers[d["driver_id"]]
@@ -498,6 +513,92 @@ class World:
             self._load(self.mode)
             self.ledger.reset()
             self.incident_seq = 0
+
+    def _seed_intents(self) -> None:
+        """Stated goals for the deliveries currently on the board.
+
+        Written as the holder would say them, because that is the difference
+        between an intent and a constraint: a person said this, owns it, and can
+        withdraw it. The recipient deadlines are deliberately set so that ONE of
+        them is already tight against a realistic reassignment — a conflict
+        check that never finds anything proves nothing.
+        """
+        self.intents.clear()
+        active = [d for d in self.deliveries.values()
+                  if d["status"] not in ("Delivered", "Cancelled")]
+
+        # Operations holds fleet-wide policy. Soft: a breach is a disclosed cost,
+        # not a veto, or the system could never trade anything off.
+        self.intents.add(
+            holder="Operations", holder_type="operations", kind="sla_promise",
+            statement="Do not breach a promised delivery window without saying so.",
+            params={}, hardness="soft", scope="*",
+            declared="dispatch policy",
+        )
+        self.intents.add(
+            holder="Operations", holder_type="operations", kind="approach_ceiling",
+            statement="No reassignment may add more than 8 km of empty running.",
+            params={"max_approach_km": 8.0}, hardness="hard", scope="*",
+            declared="cost policy",
+        )
+
+        if self.is_humanitarian:
+            for d in active:
+                self.intents.add(
+                    holder=d["recipient"], holder_type="payload",
+                    kind="cold_window",
+                    statement="We need 20 minutes to receive a consignment and "
+                              "get it into the cold room.",
+                    params={"handling_margin_minutes": 20.0},
+                    hardness="hard", scope=d["id"],
+                    declared="consignment manifest",
+                )
+            return
+
+        # Commercial: one hard cutoff, one refusal of substitution, one courier
+        # who will not work past their shift. Between them, the three most
+        # common real-world objections to an automated reassignment.
+        cutoffs = [18 * 60, 18 * 60 + 45, 19 * 60 + 30, 20 * 60]
+        for i, d in enumerate(active):
+            self.intents.add(
+                holder=d["recipient"], holder_type="recipient",
+                kind="delivery_deadline",
+                statement=f"Nothing after {cutoffs[i % len(cutoffs)] // 60:02d}:"
+                          f"{cutoffs[i % len(cutoffs)] % 60:02d} — I am out after that.",
+                params={"by_minutes": cutoffs[i % len(cutoffs)]},
+                hardness="hard", scope=d["id"],
+                declared="stated at booking",
+            )
+        if active:
+            first = active[0]
+            self.intents.add(
+                holder=first["recipient"], holder_type="recipient",
+                kind="no_substitute_handoff",
+                statement="Only the courier I was notified about — do not send "
+                          "someone else.",
+                params={}, hardness="soft", scope=first["id"],
+                declared="stated at booking",
+            )
+        # A named courier's own boundary, scoped to them so it cannot leak onto
+        # anyone else's job.
+        for drv in list(self.drivers.values())[:1]:
+            self.intents.add(
+                holder=drv["name"], holder_type="courier", kind="shift_limit",
+                statement="Leave me 30 minutes at the end of my shift — I have "
+                          "to get home.",
+                params={"buffer_minutes": 30.0}, hardness="hard", scope=drv["id"],
+                declared="rider agreement",
+            )
+
+    @property
+    def clock_minutes(self) -> float:
+        """Simulated time of day, in minutes since midnight."""
+        return SIM_START_MINUTES + self.tick * SIM_MINUTES_PER_TICK
+
+    @property
+    def clock(self) -> str:
+        m = int(round(self.clock_minutes)) % (24 * 60)
+        return f"{m // 60:02d}:{m % 60:02d}"
 
     @property
     def is_humanitarian(self) -> bool:
@@ -875,6 +976,11 @@ class World:
             return {
                 "mode": self.mode,
                 "tick": self.tick,
+                # Simulated time of day. Stated intents carry wall-clock
+                # deadlines, so the clock has to be on screen for a reader to
+                # check a conflict rather than take it on trust.
+                "clock": self.clock,
+                "clock_minutes": round(self.clock_minutes, 1),
                 "hub": self.hub,
                 "deliveries": deliveries,
                 "drivers": drivers,

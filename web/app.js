@@ -169,6 +169,50 @@ const TILES = [
 const DOSE_TILE = { key: 'doses_preserved', label: 'Doses preserved', accent: '#5eead4',
                     dec: 0, note: 'delivered inside cold-chain window' };
 
+/* ---- Intent register -------------------------------------------------- */
+/* Every stated goal, who holds it, and whether it is currently binding. The
+   switch is the point: a judge can withdraw an intent and re-run the same
+   incident, and the system commits a different courier. A read-only list would
+   prove nothing. */
+const HOLDER_ICON = {
+  recipient: '\u{1F464}', courier: '\u{1F6B4}',
+  operations: '\u{1F3E2}', payload: '\u{1F4E6}',
+};
+
+function renderIntents(payload) {
+  if (!payload) return;
+  App.intents = payload.intents || [];
+  const host = document.getElementById('intent-list');
+  const clock = document.getElementById('intents-clock');
+  const count = document.getElementById('intents-count');
+  if (!host) return;
+  if (clock && payload.clock) clock.textContent = payload.clock;
+  const live = App.intents.filter(i => i.active).length;
+  if (count) count.textContent = `${live} of ${App.intents.length} binding`;
+
+  host.innerHTML = '';
+  App.intents.forEach(i => {
+    const row = el('div', 'intent' + (i.active ? '' : ' off'));
+    row.innerHTML =
+      `<button class="intent-toggle" data-id="${esc(i.id)}"
+               data-next="${i.active ? 'false' : 'true'}"
+               role="switch" aria-checked="${i.active}"
+               title="${i.active ? 'Withdraw this intent' : 'Restore this intent'}">
+         <span class="it-knob"></span>
+       </button>
+       <div class="intent-body">
+         <div class="intent-top">
+           <span class="i-who">${HOLDER_ICON[i.holder_type] || ''} ${esc(i.holder)}</span>
+           <span class="i-hard i-${esc(i.hardness)}">${esc(i.hardness)}</span>
+           <span class="i-scope mono">${esc(i.scope === '*' ? 'fleet-wide' : i.scope)}</span>
+         </div>
+         <div class="intent-say">&ldquo;${esc(i.statement)}&rdquo;</div>
+         <div class="intent-meta mono">${esc(i.kind)}${i.declared ? ' &middot; ' + esc(i.declared) : ''}</div>
+       </div>`;
+    host.appendChild(row);
+  });
+}
+
 function renderImpact(impact, bump) {
   const strip = $('#impact-strip');
   const humanitarian = App.state && App.state.mode === 'humanitarian';
@@ -985,6 +1029,82 @@ function toolCallCard(ev) {
 
 /* Every number the Coordinator states is checked against the numbers it was
    given. It summarises, so it is the highest hallucination risk in the chain. */
+/* The pre-commit conflict check, as a card in the feed. Shows every option and
+   every intent evaluated — including the ones that passed — because a judge
+   asking "did that actually run?" needs to see the whole matrix, not just the
+   failures. */
+function intentCheckCard(ev) {
+  const c = App.chain;
+  if (!c) return;
+  const card = el('div', 'icard');
+  const rows = (ev.options || []).map(o => {
+    const hard = (o.results || []).filter(r => r.verdict === 'violated' && r.hardness === 'hard');
+    const soft = (o.results || []).filter(r => r.verdict === 'violated' && r.hardness === 'soft');
+    const risk = (o.results || []).filter(r => r.verdict === 'at_risk');
+    const tags = [
+      ...hard.map(r => `<span class="ic-t hard">${esc(r.holder)}: ${esc(r.kind)}</span>`),
+      ...soft.map(r => `<span class="ic-t soft">${esc(r.holder)}: ${esc(r.kind)}</span>`),
+      ...risk.map(r => `<span class="ic-t risk">${esc(r.holder)}: tight</span>`),
+    ].join('');
+    return `<div class="ic-row ${o.clear ? 'ok' : 'blocked'}">
+      <span class="ic-verdict">${o.clear ? 'CLEAR' : 'BLOCKED'}</span>
+      <span class="ic-who">#${o.rank} ${esc(o.name)}</span>
+      <span class="ic-eta mono">${nf(o.eta_minutes, 0)} min</span>
+      <span class="ic-tags">${tags || '<span class="ic-t none">no conflict</span>'}</span>
+    </div>`;
+  }).join('');
+  card.innerHTML =
+    `<div class="ic-top">
+       <span class="ic-mark">&#9878;</span>
+       <span class="ic-title">Intent conflict check</span>
+       <span class="ic-clock mono">${esc(ev.clock || '')}</span>
+     </div>
+     <div class="ic-sub">${ev.intents_active} stated intent(s) checked against
+       ${(ev.options || []).length} option(s) before proposing anything &middot;
+       <b>${ev.clear_count} clear</b>, ${ev.blocked_count} blocked</div>
+     <div class="ic-rows">${rows}</div>`;
+  c.root.appendChild(card);
+  feedEl().scrollTop = 0;
+}
+
+/* The gate. This is the moment the system declines to do the thing it would
+   otherwise have done. */
+function intentGateCard(ev) {
+  const c = App.chain;
+  if (!c) return;
+  const escalated = ev.resolution === 'escalated';
+  const card = el('div', 'gcard' + (escalated ? ' esc' : ''));
+  const why = (ev.blocking || []).map(v => {
+    const e = v.evidence || {};
+    const nums = Object.keys(e)
+      .filter(k => k !== 'basis')
+      .map(k => `<span class="gc-n"><i>${esc(k.replace(/_/g, ' '))}</i>${esc(String(e[k]))}</span>`)
+      .join('');
+    return `<div class="gc-v">
+        <div class="gc-say">${esc(v.holder)} &mdash; &ldquo;${esc(v.statement)}&rdquo;</div>
+        <div class="gc-nums">${nums}</div>
+        <div class="gc-hint">${esc(v.hint || '')}</div>
+      </div>`;
+  }).join('');
+  card.innerHTML =
+    `<div class="gc-top">
+       <span class="gc-mark">${escalated ? '&#9888;' : '&#8631;'}</span>
+       <span class="gc-title">${escalated
+          ? 'Blocked before commit &mdash; handed to a person'
+          : 'Blocked before commit &mdash; re-selected'}</span>
+     </div>
+     <div class="gc-body">
+       <div class="gc-line">Would have committed
+         <b>${esc(ev.blocked_driver_name)}</b>. Stopped because:</div>
+       ${why}
+       <div class="gc-out">${escalated
+          ? 'No available option satisfies every stated intent. Nothing was committed &mdash; a human decides which goal gives way.'
+          : `Committed <b>${esc(ev.substitute_driver_name || '')}</b> instead &mdash; the best option that breaks no stated intent.`}</div>
+     </div>`;
+  c.root.appendChild(card);
+  feedEl().scrollTop = 0;
+}
+
 function verificationBadge(ev) {
   const c = App.chain; if (!c) return;
   const card = el('div', 'vcard ' + (ev.passed ? 'ok' : 'bad'));
@@ -1402,6 +1522,7 @@ let mapDirty = 0;
 function renderAll(bumpImpact) {
   renderControls();
   renderImpact(App.state.impact, bumpImpact);
+  refreshIntents();
   renderFleet();
   renderRisk();
   if (App.view === 'courier') {
@@ -1478,6 +1599,9 @@ function handle(ev) {
     case 'plan':             planCard(ev); break;
     case 'tool_call':        toolCallCard(ev); break;
     case 'verification':     verificationBadge(ev); break;
+    case 'intent_check':     intentCheckCard(ev); break;
+    case 'intent_gate':      intentGateCard(ev); break;
+    case 'intents':          renderIntents(ev); break;
     case 'agent_start':      agentStart(ev); break;
     case 'agent_delta':      agentDelta(ev); break;
     case 'agent_done':       agentDone(ev); break;
@@ -1533,3 +1657,28 @@ function emptyFeedNode() {
 window.addEventListener('resize', () => { if (App.state) renderMap(); });
 
 connect();
+
+/* The register is fetched rather than pushed on boot, then kept current by the
+   `intents` event whenever one is switched. */
+function refreshIntents() {
+  fetch('/api/intents')
+    .then(r => r.json())
+    .then(renderIntents)
+    .catch(() => {});
+}
+
+document.getElementById('intents').addEventListener('click', (e) => {
+  const btn = e.target.closest('.intent-toggle');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const active = btn.dataset.next === 'true';
+  btn.disabled = true;
+  fetch('/api/intents/toggle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, active }),
+  })
+    .then(r => r.json())
+    .then(() => refreshIntents())
+    .catch(() => { btn.disabled = false; });
+});

@@ -52,6 +52,27 @@
   <!-- ================= IMPACT STRIP ================= -->
   <section class="impact-strip" id="impact-strip" aria-label="Cumulative impact"></section>
 
+  <!-- ================= INTENT REGISTER ================= -->
+  <!-- Stated goals, checked before any action is committed. Every row is
+       switchable: withdraw an intent, re-run the same incident, and the system
+       commits a different courier. That is the difference between a capability
+       and a caption. -->
+  <section class="intents" id="intents" aria-label="Stated intents">
+    <div class="intents-head">
+      <div>
+        <h2>Stated intents <span class="mono" id="intents-count"></span></h2>
+        <p>Goals declared by the people involved. Checked before the system
+           commits — switch one off and run the same incident to see the
+           decision change.</p>
+      </div>
+      <div class="intents-clock">
+        <span class="ic-label">fleet clock</span>
+        <span class="ic-time mono" id="intents-clock">--:--</span>
+      </div>
+    </div>
+    <div class="intent-list" id="intent-list"></div>
+  </section>
+
   <!-- ================= MAIN GRID ================= -->
   <main class="grid">
 

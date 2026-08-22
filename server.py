@@ -196,6 +196,32 @@ class Engine:
         })
         return {"ok": True, "enabled": self.autonomous}
 
+    def intents_payload(self) -> Dict:
+        """The whole intent register, plus the clock its deadlines are read against."""
+        return {
+            "clock": self.world.clock,
+            "clock_minutes": round(self.world.clock_minutes, 1),
+            "intents": self.world.intents.as_list(),
+        }
+
+    def set_intent_active(self, intent_id: str, active: bool) -> Dict:
+        """Turn one stated intent on or off.
+
+        This is the interaction that proves the check is load-bearing: withdraw
+        the intent, re-run the same incident, and a different courier is
+        committed. So it is a first-class endpoint, not a debug hook.
+        """
+        intent = self.world.intents.set_active(intent_id, active)
+        if intent is None:
+            return {"ok": False, "error": f"unknown intent {intent_id}"}
+        self.bus.publish({"type": "intents", **self.intents_payload()})
+        self.bus.publish({
+            "type": "log", "level": "info",
+            "msg": f"intent {intent_id} {'restored' if active else 'withdrawn'} · "
+                   f"{intent.holder}: {intent.statement}",
+        })
+        return {"ok": True, "intent": intent.as_dict()}
+
     @staticmethod
     def modes_for(disruption_key: str) -> List[str]:
         """Scenarios a disruption can occur in. Single source of truth: meta()
@@ -453,6 +479,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "forbidden"}, 403)
                     return
                 self._file(target)
+            elif route == "/api/intents":
+                self._json(ENGINE.intents_payload())
             elif route == "/api/state":
                 self._json({"state": ENGINE.world.snapshot(), "meta": ENGINE.meta()})
             elif route == "/api/stream":
@@ -478,6 +506,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result, 200 if result.get("ok") else 400)
             elif route == "/api/autonomous":
                 self._json(ENGINE.set_autonomous(body.get("enabled", False)))
+            elif route == "/api/intents/toggle":
+                result = ENGINE.set_intent_active(
+                    str(body.get("id", "")), bool(body.get("active", True)),
+                )
+                self._json(result, 200 if result.get("ok") else 400)
             elif route == "/api/reset":
                 self._json(ENGINE.reset())
             else:
