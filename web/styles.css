@@ -85,6 +85,7 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* The scroller lives on .app, not here — see below. */
   overflow: hidden;
 }
 
@@ -95,7 +96,20 @@ body {
    fixed and the live view collapsed to 22px underneath it. With flex, which
    child stretches is stated on the child, so inserting a section can never
    silently re-assign it again. */
-.app { height: 100%; display: flex; flex-direction: column; }
+/* Bounded to the viewport so the live row stays one screen and each region
+   scrolls inside itself — but scrollable, which it was not.
+   The panels above the live row used to be fixed and small, so `height: 100%`
+   with everything clipped was fine. Then the decisions panel started growing
+   with its history: the content exceeded the viewport and, with nothing able to
+   scroll, the system log sat below the fold permanently out of reach.
+   Putting the scroller on body instead was worse — .app grew to its content and
+   a one-screen dashboard became a 1791px page with the columns no longer
+   scrolling internally. So: bounded height, and .app itself scrolls when the
+   sections above the grid genuinely need more room than there is. */
+.app {
+  height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column;
+}
 
 /* flex-shrink defaults to 1, so these must opt out explicitly or they get
    squeezed to nothing when the content below is tall.
@@ -1374,7 +1388,13 @@ body {
   font-size: 10px; font-weight: 800; letter-spacing: .07em;
   text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px;
 }
-.dw-trail ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.dw-trail ul {
+  list-style: none; display: flex; flex-direction: column; gap: 4px;
+  /* Bounded and scrollable rather than truncated: the audit trail is the point,
+     so keep every entry, but stop it pushing the live row off the screen as it
+     grows. Six entries were already 166px of permanent height. */
+  max-height: 104px; overflow-y: auto; overscroll-behavior: contain;
+}
 .dw-trail li { font-size: 11px; color: var(--ink-2); line-height: 1.4; }
 .dw-trail li span { color: var(--ink-3); margin-right: 6px; font-size: 9.5px; }
 .dw-trail li i { color: var(--ink-3); }
