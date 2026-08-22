@@ -23,7 +23,9 @@ import unittest
 
 from autofleet.geo import coord, road_km
 from autofleet.world import (ARRIVAL_KM, ESCALATION_TIMEOUT_TICKS, FLEET_TARGET,
-                             SIM_MINUTES_PER_TICK, World)
+                             EMERGENCY_SHIFT_HORIZON_MINUTES, SIM_MINUTES_PER_TICK,
+                             World)
+from autofleet.world import DISRUPTIONS
 
 
 class ClockTests(unittest.TestCase):
@@ -43,6 +45,68 @@ class ClockTests(unittest.TestCase):
         snap = World().snapshot()
         self.assertIn("clock", snap)
         self.assertIn("clock_minutes", snap)
+
+
+class LayeredRecoveryTests(unittest.TestCase):
+    def _deadline(self, world, delivery_id, minutes_from_now):
+        for intent in world.intents.all():
+            if intent.scope == delivery_id and intent.kind == "delivery_deadline":
+                intent.params["by_minutes"] = world.clock_minutes + minutes_from_now
+                return
+        self.fail("delivery deadline intent missing")
+
+    def _layer2_world(self):
+        world = World()
+        target = world.deliveries["D-101"]
+        target_driver = world.drivers[target["driver_id"]]
+        target_driver["status"] = "unavailable"
+        self._deadline(world, "D-101", 240)
+        route_driver_id = world.deliveries["D-103"]["driver_id"]
+        for driver in world.drivers.values():
+            if driver["id"] not in (target_driver["id"], route_driver_id):
+                driver["status"] = "unavailable"
+        return world
+
+    def test_on_route_insertion_is_accepted_when_windows_fit(self):
+        world = self._layer2_world()
+        requirement = world.build_requirement("D-101", DISRUPTIONS["bike_breakdown"])
+        results = world.route_reallocation_candidates("D-101", requirement)
+        accepted = [r for r in results if r["status"] == "accepted"]
+        self.assertTrue(accepted)
+        self.assertIn("pickup", accepted[0]["new_route"])
+        self.assertIn("new", accepted[0]["new_route"])
+
+    def test_on_route_insertion_rejects_a_tight_existing_window(self):
+        world = self._layer2_world()
+        carrying = world.drivers[world.deliveries["D-103"]["driver_id"]]
+        self._deadline(world, carrying["assigned_delivery"], 1)
+        requirement = world.build_requirement("D-101", DISRUPTIONS["bike_breakdown"])
+        results = world.route_reallocation_candidates("D-101", requirement)
+        self.assertTrue(results)
+        self.assertTrue(all(r["status"] == "rejected" for r in results))
+        self.assertTrue(all(r["reason"] for r in results))
+
+    def test_available_soon_candidate_uses_shift_start_in_deadline(self):
+        world = World()
+        target = world.deliveries["D-101"]
+        world.drivers[target["driver_id"]]["status"] = "unavailable"
+        for driver in world.drivers.values():
+            driver["status"] = "unavailable"
+            driver["assigned_delivery"] = None
+        future = next(driver for driver in world.drivers.values()
+                  if driver["id"] != target["driver_id"])
+        future["shift_start_minutes"] = world.clock_minutes + 18
+        future["at"] = world.drivers[target["driver_id"]]["at"]
+        self._deadline(world, "D-101", 240)
+        requirement = world.build_requirement("D-101", DISRUPTIONS["bike_breakdown"])
+        results = world.available_soon_candidates("D-101", requirement,
+                                                  EMERGENCY_SHIFT_HORIZON_MINUTES)
+        selected = next(r for r in results if r["driver_id"] == future["id"])
+        self.assertTrue(selected["feasible"])
+        self._deadline(world, "D-101", 1)
+        selected = next(r for r in world.available_soon_candidates("D-101", requirement)
+                        if r["driver_id"] == future["id"])
+        self.assertFalse(selected["feasible"])
 
 
 class EtaTests(unittest.TestCase):

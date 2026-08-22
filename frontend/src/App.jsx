@@ -34,7 +34,8 @@ function AppContent() {
     switchMode,
     setAutonomous,
     resetFleet,
-    impactSeries
+    impactSeries,
+    recoveryEvents
   } = useFleetStream();
 
   // Keep route synced with browser history and hash
@@ -84,6 +85,7 @@ function AppContent() {
           fleetState={fleetState} 
           onTriggerDisruption={triggerDisruption} 
           activeChain={activeChain} 
+          recoveryEvents={recoveryEvents}
         />
       );
     }
@@ -140,6 +142,7 @@ function AppContent() {
         impactSeries={impactSeries}
         onTriggerDisruption={triggerDisruption}
         activeChain={activeChain}
+        recoveryEvents={recoveryEvents}
         pickedDriver={pickedDriver}
         setPickedDriver={setPickedDriver}
       />
