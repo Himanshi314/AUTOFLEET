@@ -50,7 +50,28 @@ const App = {
 
 /* ============================================================== MAP CAMERA == */
 
-const MAP_W = 1000, MAP_H = 600;
+const MAP_W = 1000;
+// Not a constant: the drawing height follows the panel's aspect ratio so the map
+// always fills its box instead of being letterboxed inside it. A fixed 1000x600
+// space in a short wide panel scaled the whole city down to 13.8% and left the
+// sides empty, which is what made the map look broken however much you zoomed.
+let MAP_H = 600;
+
+function syncMapSpace() {
+  const svg = $('#map');
+  if (!svg) return 1;
+  const r = svg.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return MAP_W / Math.max(r.width, 1);
+  // Clamped so an extreme panel shape cannot produce a degenerate space.
+  // Floor only guards against a degenerate space. It was 200, which is TALLER
+  // than a wide short panel needs (1238x206 wants 166) — so the clamp itself
+  // reintroduced the letterboxing this function exists to remove.
+  MAP_H = Math.max(80, Math.min(2400, Math.round(MAP_W * (r.height / r.width))));
+  svg.setAttribute('viewBox', `0 0 ${MAP_W} ${MAP_H}`);
+  // Units per CSS pixel. Uniform now that the aspect ratios agree, so a size
+  // can be given in screen pixels and converted.
+  return MAP_W / r.width;
+}
 const MAP_ZOOM_MIN = 1, MAP_ZOOM_MAX = 8;
 
 function clampCamera() {
@@ -931,6 +952,7 @@ function renderMap() {
   const svg = $('#map');
   const st = App.state;
   const map = st.map;
+  const unitsPerPx = syncMapSpace();
   const W = MAP_W, H = MAP_H;
   const P = svg.clientWidth < 520 ? 34 : 56;
   const proj = projector(map.bounds, W, H, P);
@@ -942,6 +964,12 @@ function renderMap() {
   // the geography spreads out. Stroke widths are handled in CSS by
   // vector-effect: non-scaling-stroke.
   const k = 1 / clampCamera().z;
+  // Screen pixels -> drawing units. `k` cancels the zoom; unitsPerPx cancels the
+  // viewBox-to-panel ratio, which nothing did before — so at a 418px-wide panel
+  // every glyph was drawn at about 40% of its intended size, and the driver
+  // markers were not scaled at all. Every glyph size below is now written as the
+  // size it should actually appear on screen.
+  const px = unitsPerPx * k;
 
   const gRoads = svgEl('g'), gNodes = svgEl('g'),
         gRoutes = svgEl('g'), gMarks = svgEl('g');
@@ -963,18 +991,18 @@ function renderMap() {
     const key = n.kind === 'hub' || n.kind === 'phc';
     if (n.kind === 'hub') {
       gNodes.appendChild(svgEl('rect', {
-        x: x - 4.5 * k, y: y - 4.5 * k, width: 9 * k, height: 9 * k,
-        rx: 2 * k, class: 'node-hub',
+        x: x - 4.5 * px, y: y - 4.5 * px, width: 9 * px, height: 9 * px,
+        rx: 2 * px, class: 'node-hub',
       }));
     } else {
       gNodes.appendChild(svgEl('circle', {
-        cx: x, cy: y, r: (key ? 3.6 : 2.6) * k,
+        cx: x, cy: y, r: (key ? 3.6 : 2.6) * px,
         class: n.kind === 'phc' ? 'node-phc' : 'node-dot',
       }));
     }
     const t = svgEl('text', {
-      x: x + 8 * k, y: y + 3.4 * k, class: 'node-label' + (key ? ' key' : ''),
-      style: `font-size:${(key ? 9.5 : 8.5) * k}px`,
+      x: x + 8 * px, y: y + 3.4 * px, class: 'node-label' + (key ? ' key' : ''),
+      style: `font-size:${(key ? 9.5 : 8.5) * px}px`,
     });
     t.textContent = n.name;
     gNodes.appendChild(t);
@@ -994,7 +1022,7 @@ function renderMap() {
       const [hx, hy] = proj(d.handover_at[0], d.handover_at[1]);
       legs.push([hx, hy]);
       gRoutes.appendChild(svgEl('circle', {
-        cx: hx, cy: hy, r: 3.2 * k, class: 'handover',
+        cx: hx, cy: hy, r: 3.2 * px, class: 'handover',
       }));
     }
     if (d.reroute) {
@@ -1032,13 +1060,23 @@ function renderMap() {
       class: 'mk mk-' + kind + (App.focusDriver === drv.id ? ' mk-focus' : ''),
       'data-driver': drv.id,
     });
-    // A generous transparent hit area. The visible dot is 4.6px inside a panel
-    // that can be 200px tall, which is far too small to click reliably.
-    g.appendChild(svgEl('circle', { cx: x, cy: y, r: 13, class: 'mk-hit' }));
-    if (kind !== 'standby') g.appendChild(svgEl('circle', { cx: x, cy: y, r: 7, class: 'mk-halo' }));
-    g.appendChild(svgEl('circle', { cx: x, cy: y, r: kind === 'standby' ? 3.4 : 4.6, class: 'mk-body' }));
+    // Sized in screen pixels, not drawing units: at a 0.138 scale a 13-unit
+    // circle is 1.8px on screen. 14px is a comfortable target at any panel
+    // size or zoom level.
+    g.appendChild(svgEl('circle', {
+      cx: x, cy: y, r: 14 * px, class: 'mk-hit',
+    }));
     if (kind !== 'standby') {
-      const t = svgEl('text', { x: x + 8, y: y - 5, class: 'mk-name' });
+      g.appendChild(svgEl('circle', { cx: x, cy: y, r: 7 * px, class: 'mk-halo' }));
+    }
+    g.appendChild(svgEl('circle', {
+      cx: x, cy: y, r: (kind === 'standby' ? 3.4 : 4.6) * px, class: 'mk-body',
+    }));
+    if (kind !== 'standby') {
+      const t = svgEl('text', {
+        x: x + 8 * px, y: y - 5 * px, class: 'mk-name',
+        style: `font-size:${9 * px}px`,
+      });
       t.textContent = drv.name.split(' ')[0];
       g.appendChild(t);
     }
@@ -1905,6 +1943,7 @@ document.getElementById('fleet-list').addEventListener('click', (e) => {
 function setMapExpanded(on) {
   App.mapExpanded = on;
   document.querySelector('.app').classList.toggle('map-expanded', on);
+  document.querySelector('.app').classList.toggle('map-roomy', on);
   const btn = document.getElementById('map-expand');
   if (btn) {
     btn.textContent = on ? 'Collapse' : 'Expand';
@@ -1920,4 +1959,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (App.mapExpanded) setMapExpanded(false);
   else if (App.focusDriver) clearFocus();
+});
+
+/* The drawing space is derived from the panel's shape, so a window resize has to
+   re-fit it or the map goes back to being letterboxed. */
+let mapFitTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(mapFitTimer);
+  mapFitTimer = setTimeout(() => { if (App.state && App.view === 'ops') renderMap(); }, 120);
 });

@@ -1462,3 +1462,17 @@ body {
 .panel-map .legend { flex-wrap: nowrap; overflow: hidden; }
 /* Expanded, there is room for the whole caption again. */
 .app.map-expanded .map-foot { white-space: normal; }
+
+
+/* ---- Map: give it room, and stop the footnote taking a third of it ------ */
+/* The panel was being squeezed to 83px by the panels above it, of which the
+   header and the provenance caption ate 80. A map is the one panel where a
+   sliver is worthless, so it gets a floor, and the caption only appears when
+   there is room for it. */
+.map-wrap { min-height: 170px; }
+.map-foot { display: none; }
+.app.map-roomy .map-foot { display: block; }
+/* The legend is the first thing to go when the header is tight. */
+@media (max-height: 820px) {
+  .panel-map .legend { display: none; }
+}
