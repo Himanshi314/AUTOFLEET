@@ -1422,6 +1422,7 @@ class World:
                 "service_minutes": SERVICE_MINUTES,
                 "target_eta_minutes": max(d["eta_minutes"], 12.0),
                 "zone": d["zone"],
+                "delivery_id": d["id"],
                 "min_capacity_units": d["payload_units"],
                 "rural": self.is_humanitarian,
                 "cold_window_minutes": (
@@ -1440,8 +1441,12 @@ class World:
                         continue
                     pool.append(drv)
                     continue
-                if drv["assigned_delivery"] is not None:
-                    continue  # busy on another live job
+                # Deliberately NOT filtered here. A courier already carrying a
+                # different job is ineligible, but skipping them silently meant
+                # they never reached the rejected list, so the dashboard could
+                # not answer "why wasn't Meera considered?" about someone
+                # visibly idle-looking on the map. The ranker rejects them with
+                # a stated reason instead.
                 pool.append(drv)
             return pool
 

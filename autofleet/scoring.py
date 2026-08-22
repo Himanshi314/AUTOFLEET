@@ -165,6 +165,13 @@ class DriverSuitabilityRanker:
             return f"status is {driver['status']}"
         if req.get("cold_chain") and not driver["cold_chain_capable"]:
             return "no cold-chain box"
+        # One live job per courier. This fleet does not model multi-drop: a
+        # reassignment hands over a whole delivery, so a courier mid-run is not
+        # a candidate for a second one. Stated rather than silent, because an
+        # operator can see this courier on the map and will ask.
+        carrying = driver.get("assigned_delivery")
+        if carrying and carrying != req.get("delivery_id"):
+            return f"already carrying {carrying}"
         if driver["active_load"] >= driver["capacity"]:
             return "at full load"
         needed = eta_min + req.get("service_minutes", 6.0)
