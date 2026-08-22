@@ -139,6 +139,17 @@ function wireMapCamera() {
   svg.dataset.camWired = '1';
 
   svg.addEventListener('wheel', (e) => {
+    // Plain wheel must SCROLL, not zoom. This preventDefault'd every wheel
+    // event over the SVG, which was survivable while the map was letterboxed
+    // into a third of its panel — most of the panel was empty space the event
+    // passed straight through. Once the drawing space was fitted to the panel
+    // the SVG filled it completely, sitting in the middle of the screen, so
+    // every scroll gesture got swallowed and the whole page felt frozen.
+    //
+    // Ctrl/Cmd + wheel zooms, the convention for a map embedded in a
+    // scrollable page. Expanded, the map owns the row and there is nothing to
+    // scroll past, so a plain wheel zooms there.
+    if (!(e.ctrlKey || e.metaKey || App.mapExpanded)) return;
     e.preventDefault();
     zoomMap(e.deltaY < 0 ? 1.18 : 1 / 1.18, mapPointFromEvent(e));
   }, { passive: false });
@@ -1089,6 +1100,7 @@ function renderMap() {
 
   const down = st.drivers.filter((d) => d.status === 'unavailable').length;
   const footText =
+    `Ctrl + scroll to zoom · drag to pan · ` +
     `${map.nodes.length} nodes · ${map.roads.length} corridors · ` +
     `${st.drivers.length} drivers (${carrying.size} carrying, ${down} unavailable) · ` +
     `positions from real coordinates, distances via haversine × circuity`;
@@ -1957,7 +1969,9 @@ document.getElementById('map-expand').addEventListener('click',
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (App.mapExpanded) setMapExpanded(false);
+  const zoomOpen = !document.getElementById('cardzoom').hidden;
+  if (zoomOpen) closeCardZoom();
+  else if (App.mapExpanded) setMapExpanded(false);
   else if (App.focusDriver) clearFocus();
 });
 
@@ -1967,4 +1981,63 @@ let mapFitTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(mapFitTimer);
   mapFitTimer = setTimeout(() => { if (App.state && App.view === 'ops') renderMap(); }, 120);
+});
+
+/* ---- Enlarging one agent turn ------------------------------------------ */
+/* The feed lives in a narrow column beside the fleet list and the map, which is
+   right for watching a chain run and wrong for reading one agent's output.
+   Clicking a card lifts a copy into the centre of the screen at a comfortable
+   size, with the handoff block open, because the handoff is the thing worth
+   reading slowly. */
+function openCardZoom(card) {
+  const host = document.getElementById('cz-inner');
+  const wrap = document.getElementById('cardzoom');
+  if (!host || !wrap || !card) return;
+
+  const icon = (card.querySelector('.ac-ic') || {}).textContent || '';
+  const name = (card.querySelector('.ac-name') || {}).textContent || 'Agent';
+  const owns = (card.querySelector('.ac-owns') || {}).textContent || '';
+  const time = (card.querySelector('.ac-time') || {}).textContent || '';
+  const text = (card.querySelector('.acard-body') || {}).textContent || '';
+  const src  = card.querySelector('.src');
+  const hand = card.querySelector('.handoff');
+
+  host.innerHTML =
+    `<div class="cz-head">
+       <span class="cz-ic">${esc(icon)}</span>
+       <div>
+         <div class="cz-name" id="cz-name">${esc(name)}</div>
+         <div class="cz-owns">${esc(owns)}</div>
+       </div>
+       <span class="cz-time mono">${esc(time)}</span>
+     </div>
+     ${src ? `<div class="cz-src ${src.classList.contains('fb') ? 'fb' : ''}">${esc(src.textContent)}</div>` : ''}
+     <div class="cz-text">${esc(text) || '<i>still streaming…</i>'}</div>
+     <div class="cz-hand" id="cz-hand"></div>`;
+
+  // Clone the handoff block so the original card keeps its own open/closed state.
+  if (hand) {
+    const copy = hand.cloneNode(true);
+    copy.setAttribute('open', '');
+    document.getElementById('cz-hand').appendChild(copy);
+  }
+
+  wrap.hidden = false;
+  document.getElementById('cz-close').focus();
+}
+
+function closeCardZoom() {
+  const wrap = document.getElementById('cardzoom');
+  if (wrap) wrap.hidden = true;
+}
+
+document.getElementById('feed').addEventListener('click', (e) => {
+  // Let the handoff disclosure work in place without hijacking it.
+  if (e.target.closest('summary') || e.target.closest('.handoff')) return;
+  const card = e.target.closest('.acard');
+  if (card) openCardZoom(card);
+});
+
+document.getElementById('cardzoom').addEventListener('click', (e) => {
+  if (e.target.id === 'cardzoom' || e.target.id === 'cz-close') closeCardZoom();
 });

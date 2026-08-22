@@ -1476,3 +1476,71 @@ body {
 @media (max-height: 820px) {
   .panel-map .legend { display: none; }
 }
+
+
+/* ---- One agent turn, enlarged ------------------------------------------ */
+/* The feed column is narrow because it sits beside the fleet list and the map,
+   which is right for watching a chain run and wrong for reading one turn. A
+   click lifts a copy of the card into the middle of the screen. */
+.cardzoom {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 5vh 4vw;
+  background: rgba(10, 24, 18, .52);
+  backdrop-filter: blur(2px);
+}
+.cardzoom[hidden] { display: none; }
+
+.cz-panel {
+  position: relative; width: min(760px, 100%); max-height: 90vh;
+  display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px -24px rgba(10, 24, 18, .55);
+}
+.cz-close {
+  position: absolute; top: 10px; right: 12px; z-index: 1;
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-page);
+  font-size: 20px; line-height: 1; color: var(--ink-3);
+}
+.cz-close:hover { color: var(--primary); border-color: var(--accent-dark); }
+.cz-inner { overflow-y: auto; min-height: 0; padding: 20px 22px 22px; }
+
+.cz-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-right: 34px; margin-bottom: 12px;
+}
+.cz-ic { font-size: 26px; line-height: 1; flex: 0 0 auto; }
+.cz-name { font-size: 17px; font-weight: 800; color: var(--primary); }
+.cz-owns { font-size: 12px; color: var(--ink-3); margin-top: 1px; }
+.cz-time { margin-left: auto; font-size: 11px; color: var(--ink-3); flex: 0 0 auto; }
+
+.cz-src {
+  display: inline-block; font-size: 10px; font-family: var(--font-mono);
+  padding: 2px 8px; border-radius: 999px; margin-bottom: 12px;
+  background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0;
+}
+.cz-src.fb { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+
+/* The whole reason this exists: the agent's own words, at a readable size. */
+.cz-text {
+  font-size: 16.5px; line-height: 1.62; color: var(--ink);
+  white-space: pre-wrap;
+  padding: 14px 16px; border-radius: var(--r-md);
+  background: var(--bg-page); border: 1px solid var(--border);
+}
+.cz-hand { margin-top: 14px; }
+/* The cloned handoff opens by default here — it is the part worth reading slowly. */
+.cz-hand .handoff { background: var(--bg-page); }
+.cz-hand .hx-body { max-height: none; }
+
+/* A card in the feed is now a control, so it should look like one. */
+.acard { cursor: zoom-in; }
+.acard:hover { border-color: var(--accent-dark); }
+.acard .handoff { cursor: auto; }
+
+@media (max-width: 720px) {
+  .cardzoom { padding: 2vh 3vw; }
+  .cz-text { font-size: 15px; }
+}

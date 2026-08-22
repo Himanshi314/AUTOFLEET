@@ -113,7 +113,7 @@
         <div class="map-wrap">
           <svg id="map" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Fleet map"></svg>
           <div class="map-zoom" role="group" aria-label="Map zoom">
-            <button id="map-in" title="Zoom in (or scroll / double-click the map)" aria-label="Zoom in">+</button>
+            <button id="map-in" title="Zoom in — or Ctrl + scroll, or double-click the map" aria-label="Zoom in">+</button>
             <span class="mono" id="map-zoom-label">1.0&times;</span>
             <button id="map-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
             <button id="map-reset" title="Back to the whole city" aria-label="Reset zoom" disabled>Fit</button>
@@ -167,6 +167,19 @@
     </div>
     <div class="log" id="log"></div>
   </footer>
+</div>
+
+<!-- ================= AGENT CARD, ENLARGED ================= -->
+<!-- The feed column is narrow by necessity — it sits beside the fleet list and
+     the map. Reading a full agent turn there means scrolling a 360px box line by
+     line, so clicking a card lifts it into the middle of the screen at a
+     readable size, with the handoff it received expanded. -->
+<div class="cardzoom" id="cardzoom" hidden aria-modal="true" role="dialog"
+     aria-labelledby="cz-name">
+  <div class="cz-panel" role="document">
+    <button class="cz-close" id="cz-close" aria-label="Close">&times;</button>
+    <div class="cz-inner" id="cz-inner"></div>
+  </div>
 </div>
 
 <!-- ================= DRAWER ================= -->
