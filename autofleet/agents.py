@@ -995,9 +995,14 @@ def run_chain(
             chosen = ranking["candidates"][0]
             emit({
                 "type": "log", "level": "warn",
-                "msg": f"{incident_id} · resource pick missing or ineligible "
-                       f"(got {picked_id!r}); defaulting to top-ranked candidate "
-                       f"{chosen['driver_id']}.",
+                # This is a guardrail firing, not a failure. Say so, because it
+                # appears in the operator's log and "pick missing or ineligible"
+                # reads like the system broke when in fact it just refused to
+                # act on a bad answer.
+                "msg": f"{incident_id} · guardrail · the model proposed "
+                       f"{picked_id!r}, which is not an eligible candidate; "
+                       f"rejected and fell back to the ranker's top pick "
+                       f"{chosen['driver_id']} ({chosen['name']}).",
             })
         prior.append({"label": "Resource Agent", "text": _strip_pick(resource_text)})
     else:
