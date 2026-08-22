@@ -50,6 +50,13 @@ DELIVERED_LINGER_TICKS = 6
 # board never empties during a demo.
 FLEET_TARGET = 4
 
+# How long an escalated delivery waits for a human before the simulation stops
+# holding it open. An escalation used to be terminal: the delivery kept a fleet
+# slot forever, never advanced and never retired, so escalating four deliveries
+# froze the board — no new work, no completions, dead until Reset. A real
+# dispatcher queue has a timeout, and so does this one.
+ESCALATION_TIMEOUT_TICKS = 90        # ~3.3 min of real time
+
 # Shift length and the rest between shifts, in simulated minutes / ticks.
 SHIFT_MINUTES = 210
 REST_TICKS = 25
@@ -698,6 +705,83 @@ class World:
                 drv["status"] = "available"
         self.completed += 1
 
+    def escalate(
+        self, *, delivery_id: str, incident_id: str, reason: str,
+        disruption_key: Optional[str] = None, blocking: Optional[List[Dict]] = None,
+    ) -> Dict:
+        """Hand a delivery to a human, and leave it in a state that can be acted on.
+
+        Both escalation paths — no eligible driver, and no option satisfying
+        every stated intent — come through here so the bookkeeping cannot differ
+        between them.
+
+        Two things beyond setting a status. The courier is released honestly: if
+        the disruption disabled them, a rider whose bike will not start must not
+        keep showing as carrying a job nobody is resolving. And the wait is
+        stamped, so the simulation can stop holding the delivery open forever if
+        nobody answers.
+        """
+        with self.lock:
+            d = self.deliveries.get(delivery_id)
+            if d is None:
+                return {"ok": False}
+            d["status"] = "Escalated"
+            d["escalated_tick"] = self.tick
+            d["escalation_reason"] = reason
+            d["escalation_incident"] = incident_id
+            d["escalation_blocking"] = blocking or []
+            d["awaiting_decision_since"] = self.clock
+
+            disruption = DISRUPTIONS.get(disruption_key or "", {})
+            drv = self.drivers.get(d["driver_id"])
+            if drv is not None and disruption.get("disables_driver"):
+                drv["status"] = "unavailable"
+                drv["unavailable_reason"] = disruption.get("label", "incident")
+                drv["support_dispatched"] = disruption.get("driver_support")
+                drv["earnings_protected"] = True
+                drv["assigned_delivery"] = None
+                drv["active_load"] = max(0, drv["active_load"] - 1)
+
+            self.ledger.record_escalation(
+                incident_id=incident_id, delivery_id=delivery_id, reason=reason,
+            )
+            return {"ok": True, "delivery": d}
+
+    def _resolve_stale_escalations(self) -> List[Dict]:
+        """Close out escalations nobody answered. Called with the lock held.
+
+        Not a resolution the system gets credit for: the human intervention is
+        already on the ledger and stays there. This only stops an unattended
+        demo from wedging. If the original courier can still carry the job it
+        goes back to them; if they were disabled, the delivery is cancelled
+        honestly rather than left pending forever.
+        """
+        closed = []
+        for d in self.deliveries.values():
+            if d["status"] != "Escalated":
+                continue
+            waited = self.tick - d.get("escalated_tick", self.tick)
+            if waited < ESCALATION_TIMEOUT_TICKS:
+                continue
+            drv = self.drivers.get(d.get("original_driver_id"))
+            if drv is not None and drv["status"] in ("available", "on_route"):
+                drv["status"] = "on_route"
+                drv["assigned_delivery"] = d["id"]
+                d["driver_id"] = drv["id"]
+                d["status"] = "On Route"
+                d["timed_out_to_original"] = True
+                self._recompute_eta(d)
+                closed.append({"delivery_id": d["id"], "outcome": "reverted",
+                               "driver": drv["name"]})
+            else:
+                d["status"] = "Cancelled"
+                d["delivered_tick"] = self.tick
+                closed.append({"delivery_id": d["id"], "outcome": "cancelled",
+                               "driver": None})
+            for key in ("escalated_tick", "awaiting_decision_since"):
+                d.pop(key, None)
+        return closed
+
     def _rest_driver(self, drv: Dict) -> None:
         """End of shift: the courier goes home and a rested one takes over.
 
@@ -786,6 +870,7 @@ class World:
                         and drv["shift_remaining_minutes"] <= 0.0):
                     self._rest_driver(drv)
 
+            self._resolve_stale_escalations()
             self._retire_and_refill()
 
     def _retire_and_refill(self) -> None:
@@ -799,8 +884,11 @@ class World:
                     and self.tick - d.get("delivered_tick", self.tick) >= DELIVERED_LINGER_TICKS):
                 del self.deliveries[did]
 
+        # An escalated delivery is waiting on a person, not on the fleet, so it
+        # must not count against the target — otherwise four escalations mean no
+        # new work is ever dispatched and the board stops moving.
         active = [d for d in self.deliveries.values()
-                  if d["status"] not in ("Delivered", "Cancelled")]
+                  if d["status"] not in ("Delivered", "Cancelled", "Escalated")]
         while len(active) < FLEET_TARGET:
             new = self._spawn_delivery()
             if new is None:

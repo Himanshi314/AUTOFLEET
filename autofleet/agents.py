@@ -760,11 +760,11 @@ def run_chain(
                    f"to a human dispatcher. This is a genuine escalation, not a "
                    f"resolution.",
         })
-        world.deliveries[delivery_id]["status"] = "Escalated"
-        # A person now has to deal with this, so the dashboard must say so.
-        world.ledger.record_escalation(
-            incident_id=incident_id, delivery_id=delivery_id,
-            reason=plan["reason"],
+        # A person now has to deal with this: the dashboard must say so, the
+        # courier must be released honestly, and the wait has to be bounded.
+        world.escalate(
+            delivery_id=delivery_id, incident_id=incident_id,
+            reason=plan["reason"], disruption_key=disruption_key,
         )
         emit({"type": "state", "state": world.snapshot()})
         emit({
@@ -1078,9 +1078,9 @@ def run_chain(
                 "msg": f"{incident_id} · no option satisfies every stated intent; "
                        f"escalating the conflict for a human decision.",
             })
-            world.deliveries[delivery_id]["status"] = "Escalated"
-            world.ledger.record_escalation(
-                incident_id=incident_id, delivery_id=delivery_id, reason=reason,
+            world.escalate(
+                delivery_id=delivery_id, incident_id=incident_id, reason=reason,
+                disruption_key=disruption_key, blocking=gate["blocking"],
             )
             emit({"type": "state", "state": world.snapshot()})
             emit({

@@ -377,5 +377,87 @@ class GateIntegrationTests(unittest.TestCase):
                          "an escalated conflict must not reassign anyone")
 
 
+# ==========================================================================
+# Escalation must not wedge the fleet
+# ==========================================================================
+
+class EscalationLifecycleTests(unittest.TestCase):
+    """An escalation used to be terminal: the delivery held a fleet slot for
+    ever, never advanced and never retired, so four of them froze the board.
+    A dispatcher queue has a timeout, and these are the properties that matter
+    when it fires."""
+
+    def _escalate(self, disruption):
+        from autofleet.world import World
+        from autofleet.llm import LLM
+        from autofleet.agents import run_chain
+        w = World()
+        for i in w.intents.for_delivery("D-101"):
+            if i.kind == "delivery_deadline":
+                i.params["by_minutes"] = w.clock_minutes - 1.0
+                i.hardness = "hard"
+        original = w.deliveries["D-101"]["driver_id"]
+        run_chain(w, LLM(), delivery_id="D-101", disruption_key=disruption,
+                  trigger="test", emit=lambda e: None)
+        return w, original
+
+    def test_an_escalated_delivery_does_not_hold_a_fleet_slot(self):
+        from autofleet.world import FLEET_TARGET
+        w, _ = self._escalate("bike_breakdown")
+        for _ in range(20):
+            w.drift()
+        working = [d for d in w.deliveries.values()
+                   if d["status"] not in ("Delivered", "Cancelled", "Escalated")]
+        self.assertEqual(len(working), FLEET_TARGET,
+                         "new work must be dispatched around an escalation")
+
+    def test_a_disabled_courier_is_released_rather_than_left_carrying(self):
+        w, original = self._escalate("bike_breakdown")
+        drv = w.drivers[original]
+        self.assertEqual(drv["status"], "unavailable")
+        self.assertIsNone(drv["assigned_delivery"])
+        self.assertTrue(drv["earnings_protected"],
+                        "the rider did not cause the breakdown")
+
+    def test_an_unanswered_escalation_reverts_to_the_original_courier(self):
+        from autofleet.world import ESCALATION_TIMEOUT_TICKS
+        w, original = self._escalate("wrong_address")   # does not disable them
+        while w.tick < ESCALATION_TIMEOUT_TICKS + 2:
+            w.drift()
+        d = w.deliveries["D-101"]
+        self.assertEqual(d["status"], "On Route")
+        self.assertEqual(d["driver_id"], original)
+        self.assertTrue(d.get("timed_out_to_original"))
+
+    def test_the_timeout_does_not_erase_the_human_intervention(self):
+        from autofleet.world import ESCALATION_TIMEOUT_TICKS
+        w, _ = self._escalate("wrong_address")
+        while w.tick < ESCALATION_TIMEOUT_TICKS + 2:
+            w.drift()
+        totals = w.ledger.totals()
+        self.assertEqual(totals["human_interventions"], 1,
+                         "a person was needed; a timeout does not undo that")
+        self.assertEqual(totals["incidents_resolved"], 0,
+                         "a timeout is not an autonomous resolution")
+
+    def test_an_escalation_with_no_courier_left_is_cancelled_honestly(self):
+        from autofleet.world import ESCALATION_TIMEOUT_TICKS
+        w, original = self._escalate("bike_breakdown")   # disables the rider
+        while w.tick < ESCALATION_TIMEOUT_TICKS + 2:
+            w.drift()
+        d = w.deliveries.get("D-101")
+        # Either cancelled outright, or already retired off the board.
+        self.assertTrue(d is None or d["status"] == "Cancelled",
+                        "with no courier available it must not stay pending")
+
+    def test_the_blocking_intents_are_kept_for_whoever_picks_it_up(self):
+        w, _ = self._escalate("wrong_address")
+        d = w.deliveries["D-101"]
+        self.assertTrue(d["escalation_reason"])
+        self.assertTrue(d["escalation_blocking"],
+                        "a person needs to see which intents collided")
+        self.assertIn("awaiting_decision_since", d)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
