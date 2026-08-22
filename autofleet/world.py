@@ -63,7 +63,6 @@ RESCHEDULE_MINUTES = 45.0
 # Shift length and the rest between shifts, in simulated minutes / ticks.
 SHIFT_MINUTES = 210
 REST_TICKS = 25
-EMERGENCY_SHIFT_HORIZON_MINUTES = 120.0
 
 # Not every delivery is routine. A real book has a tail: an address the geocoder
 # is unsure of, a recipient with a history of being out, a corridor that is
@@ -241,7 +240,6 @@ def _driver(
     *, status="available", on_time=0.94, cold=False, capacity=4, load=0,
     shift_remaining=210, hours_on_shift=3.0, health_risk=0.10,
     payload_units=12, zones=(), nudge=(0.0, 0.0), at_override=None,
-    shift_start_minutes=None,
 ) -> Dict:
     # `nudge` offsets a driver from the node centroid in degrees, so two drivers
     # in the same locality are not at an identical coordinate. ~0.0019 deg is
@@ -263,7 +261,6 @@ def _driver(
         "capacity": capacity,
         "active_load": load,
         "shift_remaining_minutes": float(shift_remaining),
-        "shift_start_minutes": shift_start_minutes,
         "hours_on_shift": hours_on_shift,
         "vehicle_health_risk": health_risk,
         "payload_capacity_units": payload_units,
@@ -454,8 +451,7 @@ def _humanitarian_state() -> Dict:
 class World:
     """Mutable fleet state with a background telemetry drift and a risk view."""
 
-    def __init__(self, mode: str = "commercial", seed: int = 7,
-                 emergency_activation_enabled: bool = True) -> None:
+    def __init__(self, mode: str = "commercial", seed: int = 7) -> None:
         self.lock = threading.RLock()
         self.rng = random.Random(seed)
         self.ledger = ImpactLedger()
@@ -468,7 +464,6 @@ class World:
         self.decisions: List[Dict] = []
         self.incident_seq = 0
         self.mode = mode
-        self.emergency_activation_enabled = emergency_activation_enabled
         self.tick = 0
         # Bumped on every (re)load. An in-flight agent chain captures this and
         # aborts if the world is reset or the scenario switched underneath it,
@@ -708,13 +703,7 @@ class World:
         d["delivered_tick"] = self.tick
         drv = self.drivers.get(d["driver_id"])
         if drv:
-            assigned = drv.get("assigned_deliveries")
-            if assigned:
-                assigned = [item for item in assigned if item != d["id"]]
-                drv["assigned_deliveries"] = assigned
-                drv["assigned_delivery"] = assigned[0] if assigned else None
-            else:
-                drv["assigned_delivery"] = None
+            drv["assigned_delivery"] = None
             drv["active_load"] = max(0, drv["active_load"] - 1)
             # A courier who was released earlier stays off the road; anyone else
             # is free for the next job.
@@ -1461,142 +1450,6 @@ class World:
                 pool.append(drv)
             return pool
 
-    def _delivery_deadline(self, delivery_id: str) -> Optional[float]:
-        """Return a delivery's stated absolute deadline, when one exists."""
-        for intent in self.intents.all():
-            if intent.scope != delivery_id or intent.kind != "delivery_deadline":
-                continue
-            return float(intent.params["by_minutes"])
-        return None
-
-    def route_reallocation_candidates(self, delivery_id: str, requirement: Dict) -> List[Dict]:
-        """Try every pickup/drop insertion into each eligible courier's live route."""
-        with self.lock:
-            delivery = self.deliveries[delivery_id]
-            candidates = []
-            pickup = requirement["pickup"]
-            new_drop = requirement["dropoff"]
-            traffic = requirement.get("traffic_index", 0.4)
-            rural = requirement.get("rural", False)
-            new_deadline = self._delivery_deadline(delivery_id)
-            for driver in self.drivers.values():
-                if driver["status"] != "on_route" or driver.get("id") == delivery["driver_id"]:
-                    continue
-                result = {
-                    "driver_id": driver["id"], "name": driver["name"], "layer": 2,
-                    "status": "rejected", "availability": "on_route",
-                    "original_route": [], "new_route": [],
-                    "additional_distance_km": 0.0, "eta_impact_minutes": 0.0,
-                }
-                carrying_id = driver.get("assigned_delivery")
-                existing = self.deliveries.get(carrying_id or "")
-                if not existing:
-                    result["reason"] = "on-route driver has no active route to simulate"
-                    candidates.append(result)
-                    continue
-                existing_deadline = self._delivery_deadline(existing["id"])
-                existing_stop = coord(existing["destination"])
-                original_route = [existing["destination"]]
-                result["original_route"] = original_route[:]
-                if requirement.get("cold_chain") and not driver["cold_chain_capable"]:
-                    result["reason"] = "no cold-chain box"
-                    candidates.append(result)
-                    continue
-                if driver["active_load"] >= driver["capacity"]:
-                    result["reason"] = "at full load"
-                    candidates.append(result)
-                    continue
-                if requirement.get("min_capacity_units", 0) > driver["payload_capacity_units"]:
-                    result["reason"] = "payload too large for vehicle"
-                    candidates.append(result)
-                    continue
-
-                stops = [("existing", existing_stop), ("pickup", pickup), ("new", new_drop)]
-                best = None
-                # Keep the existing stop order and require pickup before the new drop.
-                for pickup_at in range(0, 2):
-                    for drop_at in range(pickup_at + 1, 3):
-                        route = ["existing"]
-                        route.insert(pickup_at, "pickup")
-                        route.insert(drop_at, "new")
-                        points = [driver["at"]] + [dict(stops)[name] for name in route]
-                        elapsed = 0.0
-                        distance = 0.0
-                        arrivals = {}
-                        for index in range(1, len(points)):
-                            leg_km = road_km(points[index - 1], points[index])
-                            distance += leg_km
-                            elapsed += travel_minutes(leg_km, traffic, rural)
-                            arrivals[route[index - 1]] = elapsed
-                            elapsed += SERVICE_MINUTES
-                        if existing_deadline is not None and self.clock_minutes + arrivals["existing"] + SERVICE_MINUTES > existing_deadline:
-                            continue
-                        if new_deadline is not None and self.clock_minutes + arrivals["new"] + SERVICE_MINUTES > new_deadline:
-                            continue
-                        if elapsed > driver["shift_remaining_minutes"]:
-                            continue
-                        if best is None or arrivals["new"] < best["arrivals"]["new"]:
-                            best = {"route": route, "distance": distance, "elapsed": elapsed,
-                                    "arrivals": arrivals}
-                original_distance = road_km(driver["at"], existing_stop)
-                original_time = travel_minutes(original_distance, traffic, rural) + SERVICE_MINUTES
-                if best is None:
-                    # Calculate the least-bad route for a useful rejection impact.
-                    result["reason"] = "inserting delivery would violate an existing deadline or shift limit"
-                    result["eta_impact_minutes"] = round(max(0.0, original_time), 1)
-                else:
-                    result.update({
-                        "status": "accepted",
-                        "reason": "new delivery can be inserted without violating delivery windows",
-                        "new_route": best["route"],
-                        "additional_distance_km": round(best["distance"] - original_distance, 2),
-                        "eta_impact_minutes": round(best["elapsed"] - original_time, 1),
-                        "new_delivery_eta_minutes": round(best["arrivals"]["new"] + SERVICE_MINUTES, 1),
-                    })
-                candidates.append(result)
-            return candidates
-
-    def available_soon_candidates(self, delivery_id: str, requirement: Dict,
-                                  horizon_minutes: float = EMERGENCY_SHIFT_HORIZON_MINUTES) -> List[Dict]:
-        """Evaluate future-shift couriers without silently activating them early."""
-        with self.lock:
-            delivery = self.deliveries[delivery_id]
-            deadline = self._delivery_deadline(delivery_id)
-            out = []
-            for driver in self.drivers.values():
-                start = driver.get("shift_start_minutes")
-                if driver["status"] in ("available", "on_route") or start is None:
-                    continue
-                starts_in = float(start) - self.clock_minutes
-                if starts_in <= 0:
-                    continue
-                if starts_in > horizon_minutes:
-                    continue
-                approach = road_km(driver["at"], requirement["pickup"])
-                travel = travel_minutes(approach, requirement.get("traffic_index", 0.4), requirement.get("rural", False))
-                leg = travel_minutes(road_km(requirement["pickup"], requirement["dropoff"]), requirement.get("traffic_index", 0.4), requirement.get("rural", False))
-                total = starts_in + travel + leg + requirement.get("service_minutes", SERVICE_MINUTES)
-                rejection = None
-                if requirement.get("cold_chain") and not driver["cold_chain_capable"]:
-                    rejection = "no cold-chain box"
-                elif requirement.get("min_capacity_units", 0) > driver["payload_capacity_units"]:
-                    rejection = "payload too large for vehicle"
-                elif deadline is not None and self.clock_minutes + total > deadline:
-                    rejection = "shift start plus route misses the delivery deadline"
-                feasible = rejection is None
-                out.append({
-                    "driver_id": driver["id"], "name": driver["name"],
-                    "availability": "available_soon", "layer": "3A",
-                    "shift_starts_in_minutes": round(starts_in, 1),
-                    "estimated_pickup_eta": round(starts_in + travel, 1),
-                    "estimated_delivery_eta": round(total, 1),
-                    "deadline": round(max(0.0, deadline - self.clock_minutes), 1) if deadline is not None else None,
-                    "feasible": feasible,
-                    "status": "accepted" if feasible else "rejected",
-                    "reason": "shift start plus route fits the delivery deadline" if feasible else rejection,
-                })
-            return out
-
     def apply_resolution(
         self,
         *,
@@ -1624,7 +1477,6 @@ class World:
 
             if reassigned:
                 new_driver = self.drivers[chosen["driver_id"]]
-                absorbed_delivery = new_driver.get("assigned_delivery") if chosen.get("layer") == 2 else None
                 if previous_driver:
                     previous_driver["assigned_delivery"] = None
                     if disruption["disables_driver"]:
@@ -1635,10 +1487,7 @@ class World:
                     else:
                         previous_driver["status"] = "available"
                 new_driver["status"] = "on_route"
-                if absorbed_delivery:
-                    new_driver["assigned_deliveries"] = [absorbed_delivery, delivery_id]
-                else:
-                    new_driver["assigned_delivery"] = delivery_id
+                new_driver["assigned_delivery"] = delivery_id
                 new_driver["active_load"] = min(
                     new_driver["capacity"], new_driver["active_load"] + 1
                 )

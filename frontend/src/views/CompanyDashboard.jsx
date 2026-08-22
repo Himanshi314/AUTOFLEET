@@ -24,7 +24,6 @@ export function CompanyDashboard({
   impactSeries = [],
   onTriggerDisruption,
   activeChain,
-  recoveryEvents = [],
   pickedDriver,
   setPickedDriver
 }) {
@@ -57,14 +56,6 @@ export function CompanyDashboard({
 
   const activeResolvingCount = deliveries.filter(d => d.status === 'Resolving').length;
   const highRiskCount = deliveries.filter(d => d.risk_band === 'critical' || d.risk_band === 'elevated').length;
-  const latestRecovery = recoveryEvents[0];
-  const layerEvents = recoveryEvents.filter(e => e.layer);
-  const layerStatus = (layer, started, failed, accepted) => {
-    if (layerEvents.some(e => String(e.layer) === layer && e.event === accepted)) return 'accepted';
-    if (layerEvents.some(e => String(e.layer) === layer && e.event === failed)) return 'failed';
-    if (layerEvents.some(e => String(e.layer) === layer && e.event === started)) return 'active';
-    return 'pending';
-  };
 
   return (
     <div style={{ maxWidth: 1440, margin: '0 auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -481,39 +472,6 @@ export function CompanyDashboard({
           {/* Live Agent Activity Feed Panel */}
           <div style={{ minHeight: 380, height: 420 }}>
             <AgentFeed activeChain={activeChain} />
-          </div>
-
-          <div className="card" style={{ padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <div>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-main)' }}>Autonomous Recovery Layers</h4>
-                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>Live evidence from the server decision stream</p>
-              </div>
-              {latestRecovery && <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>{latestRecovery.receivedAt}</span>}
-            </div>
-            <div style={{ display: 'grid', gap: 7 }}>
-              {[
-                ['1', 'AVAILABLE NOW', 'layer_1_started', 'layer_1_no_feasible_candidate', 'layer_1_candidate_found'],
-                ['2', 'ACTIVE ROUTES', 'layer_2_started', 'layer_2_no_feasible_candidate', 'route_candidate_accepted'],
-                ['3A', 'AVAILABLE SOON', 'available_soon_search_started', 'operator_escalation', 'available_soon_candidate_selected']
-              ].map(([layer, label, started, failed, accepted]) => {
-                const status = layerStatus(layer, started, failed, accepted);
-                const evidence = layerEvents.find(e => String(e.layer) === layer && e.event.includes('candidate'));
-                return (
-                  <div key={layer} style={{ border: '1px solid var(--border-light)', borderRadius: 6, padding: '9px 10px', background: status === 'accepted' ? '#ECFDF5' : status === 'failed' ? '#FFF7ED' : 'var(--bg-subtle)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                      <strong style={{ fontSize: 11, color: 'var(--text-main)' }}>LAYER {layer} · {label}</strong>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: status === 'accepted' ? '#047857' : status === 'failed' ? '#C2410C' : 'var(--text-muted)' }}>{status.toUpperCase()}</span>
-                    </div>
-                    {evidence && <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--text-secondary)' }}>
-                      <b>{evidence.driver_id || 'Resource search'}</b>{evidence.reason ? ` · ${evidence.reason}` : ''}
-                      {evidence.new_route?.length > 0 && <div style={{ marginTop: 3 }}>Route: {evidence.new_route.join(' → ')}</div>}
-                      {evidence.impact_minutes != null && <div style={{ marginTop: 2 }}>ETA impact: +{evidence.impact_minutes} min</div>}
-                    </div>}
-                  </div>
-                );
-              })}
-            </div>
           </div>
         </div>
       </div>

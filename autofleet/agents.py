@@ -25,7 +25,7 @@ import re
 import time
 from typing import Callable, Dict, List, Optional
 
-from .geo import NODES, coord, road_km
+from .geo import NODES, coord
 from .llm import LLM
 from .routing import ALL_AGENTS, plan_chain
 from .scoring import RANKER
@@ -723,68 +723,6 @@ def run_chain(
             "rejected": ranking["rejected"][:6],
         },
     })
-
-    # Recovery layers are deliberately outside the normal ranker: its hard
-    # constraint that a courier may carry one job is correct for Layer 1, while
-    # Layer 2 proves that an on-route courier can absorb a second stop.
-    emit({"type": "event", "event": "resource_search_started", "layer": 1,
-          "delivery_id": delivery_id})
-    if ranking["candidates"]:
-        emit({"type": "event", "event": "layer_1_started", "layer": 1,
-              "candidate_count": len(ranking["candidates"])})
-        emit({"type": "event", "event": "layer_1_candidate_found", "layer": 1,
-              "candidate_count": len(ranking["candidates"]),
-              "driver_id": ranking["candidates"][0]["driver_id"]})
-    else:
-        emit({"type": "event", "event": "layer_1_no_feasible_candidate",
-              "layer": 1, "reason": "no available-now driver passed hard constraints"})
-        emit({"type": "event", "event": "layer_2_started", "layer": 2})
-        route_results = world.route_reallocation_candidates(delivery_id, requirement)
-        route_accepted = [r for r in route_results if r["status"] == "accepted"]
-        for result in route_results:
-            emit({"type": "event", "event": "route_simulation_started", "layer": 2,
-                  "driver_id": result["driver_id"], "original_route": result["original_route"]})
-            emit({"type": "event", "event": "route_candidate_" + result["status"],
-                  "layer": 2, "driver_id": result["driver_id"],
-                  "reason": result["reason"],
-                  "impact_minutes": result["eta_impact_minutes"],
-                  "new_route": result.get("new_route", [])})
-        if route_accepted:
-            route_choice = min(route_accepted, key=lambda r: r["eta_impact_minutes"])
-            driver = world.drivers[route_choice["driver_id"]]
-            clone = dict(driver, status="available", assigned_delivery=None)
-            route_rank = RANKER.rank([clone], requirement)
-            ranking["candidates"] = route_rank["candidates"]
-            chosen_route_result = route_choice
-            ranking["candidates"][0].update({
-                "layer": 2,
-                "route": route_choice,
-                "eta_minutes": route_choice["new_delivery_eta_minutes"],
-                "distance_km": round(road_km(driver["at"], requirement["pickup"]), 2),
-            })
-        else:
-            emit({"type": "event", "event": "layer_2_no_feasible_candidate", "layer": 2})
-            emit({"type": "event", "event": "available_soon_search_started", "layer": "3A"})
-            soon_results = world.available_soon_candidates(delivery_id, requirement)
-            for result in soon_results:
-                emit({"type": "event", "event": "available_soon_candidate_" +
-                      ("found" if result["feasible"] else "rejected"),
-                      "layer": "3A", **result})
-            soon_accepted = [r for r in soon_results if r["feasible"]]
-            if soon_accepted and world.emergency_activation_enabled:
-                soon_choice = min(soon_accepted, key=lambda r: r["estimated_delivery_eta"])
-                driver = world.drivers[soon_choice["driver_id"]]
-                clone = dict(driver, status="available", assigned_delivery=None)
-                soon_rank = RANKER.rank([clone], requirement)
-                ranking["candidates"] = soon_rank["candidates"]
-                ranking["candidates"][0].update({"layer": "3A", "available_soon": soon_choice,
-                                                   "eta_minutes": soon_choice["estimated_delivery_eta"]})
-                emit({"type": "event", "event": "available_soon_candidate_selected",
-                      "layer": "3A", **soon_choice})
-            else:
-                emit({"type": "event", "event": "operator_escalation", "layer": "3B",
-                        "reason": ("emergency activation policy disabled" if soon_accepted
-                               else "no feasible available-now, route, or available-soon resource")})
 
     # ---- Route the incident. Still no model calls. --------------------------
 
